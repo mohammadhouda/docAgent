@@ -171,7 +171,7 @@ export default function ChatInterface() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask a question about your documents… (Enter to send, Shift+Enter for newline)"
+            placeholder="Ask a question about your documents…"
             rows={1}
             className="flex-1 resize-none px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm max-h-32 overflow-y-auto"
             style={{ minHeight: '48px' }}

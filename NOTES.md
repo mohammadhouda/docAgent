@@ -1,152 +1,75 @@
 # DocAgent — Build Notes
 
-## AI Coding Agent Used
+## AI Coding Agent
 
-**Claude Code** (Anthropic) — used throughout the entire build for architecture, code generation, refactoring, and documentation.
+Built entirely with **Claude Code** (Anthropic) — architecture, code generation, refactoring, debugging, and documentation across all 11 build phases.
+
+---
+
+## How Long It Took
+
+Approximately **4–5 days** of iterative development across 11 phases, working conversationally with Claude Code. Each phase was driven by a high-level direction ("add semantic search", "make responses structured JSON", "refactor the whole thing") and Claude Code handled the full implementation — reading existing files, planning changes across multiple files, writing code, and fixing issues that came up.
+
+The workflow was closer to technical product management than traditional coding: decide what to build, review what was produced, course-correct, repeat.
 
 ---
 
 ## Build Phases
 
-### Phase 1 — Project Setup
-Monorepo scaffold with npm workspaces, shared `tsconfig.base.json`, `concurrently` dev runner, `.env` wiring.
-
-### Phase 2 — Parsing & Ingestion
-- PDF: per-page text extraction via `pdf-parse` with `pagerender` callback; chunks tagged with page number
-- Excel: row-batch chunking via `exceljs`; column headers prepended to each row for context
-- Chunker: ~6 000-char chunks with 200-char overlap, breaks at paragraph then sentence boundaries
-- Multer upload route + folder-path ingest route; both call the same `ingestFile()` pipeline
-
-### Phase 3 — AI Agent (initial)
-- OpenAI function-calling loop (max 5 iterations) in `services/agent.ts`
-- Initial 5 tools: `list_documents`, `search_documents`, `extract_cost_items`, `extract_dates_deliverables`, `summarize_document`
-- GPT-driven metadata extraction on every ingested document (type, project name, currency, parties)
-
-### Phase 4 — Frontend
-- Next.js + Tailwind chat interface
-- Drag-and-drop file upload with job progress display
-- Collapsible source citations per message
-- Tool-used badges on assistant messages
-
-### Phase 5 — Semantic Search
-- `text-embedding-3-small` embeddings generated at ingest time (batched 100/request)
-- `searchBySimilarity()` using pgvector cosine distance (`<=>` operator) with HNSW index
-- `searchDocuments` tool prefers semantic search; falls back to PostgreSQL FTS when no embeddings exist
-
-### Phase 6 — Structured JSON Responses
-Replaced free-form string responses with a typed JSON schema rendered as rich UI components.
-
-**Why:** The AI was generating inconsistent markdown — sometimes tables, sometimes bullets, sometimes prose. The frontend had no way to distinguish a cost table from a milestone list.
-
-**What changed:**
-- `StructuredAnswer` type added to both backend and frontend
-- System prompt rewritten: AI must return a raw JSON object; no markdown, no code fences
-- `agent.ts` parses with `JSON.parse`, falls back to `{ type: "paragraph" }` on failure
-- `StructuredAnswer.tsx` dispatches each section to a typed renderer (key_facts, timeline, table, list, parties, paragraph)
-- `react-markdown` removed entirely from `MessageBubble`
-
-### Phase 7 — PostgreSQL + Drizzle + BullMQ
-Replaced the in-memory document store with a proper persistence layer.
-
-**What was added:**
-- PostgreSQL schema: `documents`, `chunks`, `conversations`, `messages`, `extracted_values`
-- Drizzle ORM for type-safe queries; raw `pg` pool for vector and FTS operations
-- pgvector extension — embeddings stored in `chunks.embedding vector(1536)` with HNSW index
-- BullMQ async job queue for file uploads — server responds immediately, worker processes in background
-- Conversation + message persistence — chat history survives page reload
-- `db/migrate.ts` runs `CREATE TABLE IF NOT EXISTS` + `CREATE INDEX IF NOT EXISTS` on startup
-
-### Phase 8 — Structured Value Extraction
-Added a second extraction pass that stores individual typed values in `extracted_values` for direct SQL queries.
-
-**Excel** — deterministic column classifier (`excelExtractor.ts`):
-- Smart header row detection (skips merged title rows)
-- Column type classification via regex (cost, date, quantity, party, percentage, reference, duration)
-- Cost column priority: Committed > Total Amount > Amount > Qty × Rate fallback
-- Summary sheets (no item-number column) excluded from line-item extraction
-- Total/Grand Total rows skipped
-
-**PDF** — per-page LLM extraction (`pdfExtractor.ts`):
-- 5 concurrent `gpt-4o-mini` calls per batch of pages
-- Returns typed items: `{ type, label, rawValue, numericValue, dateValue, unit, context }`
-
-### Phase 9 — Tool Expansion (5 → 11 tools)
-Added 6 new tools targeting the `extracted_values` table directly — zero AI tokens at query time:
-
-| Tool | Purpose |
+| Phase | What was built |
 |---|---|
-| `calculate_cost_summary` | Grouped cost totals by sheet or trade; accepts `category` filter |
-| `compare_costs` | Cross-document cost comparison with optional category/document filters |
-| `extract_quantities` | Measured quantities filterable by unit and minimum value |
-| `extract_parties` | Named parties deduplicated by role + name |
-| `extract_percentages` | VAT, retention, markup rates sorted by value |
-| `get_document_sections` | Sheet names with cost totals + item-code prefix breakdown (A, B, M, E…) |
-
-**`extract_cost_items` enhanced:** added `category` filter (ILIKE against label and sheet name) and `maxAmount` upper bound.
-
-**`calculate_cost_summary` category filter:** dual ILIKE matches both `sheet_name` and `ev.label` — handles both sheet-per-trade layouts and single-sheet BOQs where trade appears only in item descriptions.
-
-System prompt updated with precise tool routing rules, parallel tool call guidance, and `list_documents` frequency fix (once per session, not every message).
-
-### Phase 10 — Refactor Pass
-Senior-engineer clean-up of the full codebase.
-
-| File | Change |
-|---|---|
-| `services/agent.ts` | Fixed `gpt-5.4-mini` → `gpt-4o-mini`; moved imports to top; renamed param `conversationId` → `requestId`; removed `stringifyContent` helper; extracted `FALLBACK_ANSWER` constant; removed `|| 5` redundant fallback |
-| `services/metadata.ts` | Fixed `gpt-5.4-mini` → `gpt-4o-mini` |
-| `services/embeddings.ts` | Removed `cosineSimilarity` — exported but never used |
-| `services/requestStatus.ts` | Renamed all params from `conversationId` → `requestId`; modernised interval |
-| `types/index.ts` | Removed `AskRequest` interface — never used |
-| `index.ts` | Removed `export default app` — never imported; CORS origin reads from `config.corsOrigin` |
-| `config.ts` | Added `corsOrigin` field (reads `CORS_ORIGIN` env var) |
-| `tools/getDocumentSections.ts` | Added `d.file_name` to prefix query; fixed fallback logic that was returning UUID instead of filename |
-| `components/ChatInterface.tsx` | Removed broken status polling — it ran after `askQuestion` resolved, so the status was already deleted; UI never updated |
-
-### Phase 11 — Async Ask Queue
-
-Converted `POST /api/ask` from a blocking request to an async BullMQ job to eliminate socket hangouts on long-running agent loops (up to 90 s).
-
-**Why:** Long AI requests hit proxy/browser socket timeouts. The same pattern already worked for file uploads.
-
-**What changed:**
-
-| File | Change |
-|---|---|
-| `services/queue.ts` | Added `AskJobData` type, `askQueue`, and `createAskWorker()` — worker runs `runAgent()` + saves assistant message; concurrency 3 |
-| `routes/ask.ts` | Rewrote: POST enqueues job → 202 `{ jobId }`; removed blocking `runAgent` call; added `GET /jobs/:jobId` for polling |
-| `index.ts` | Added `createAskWorker()` call on startup |
-| `lib/api.ts` | `askQuestion` now POSTs to enqueue then polls `GET /ask/jobs/:jobId` every 1 s until `completed`/`failed`; removed unused `getAskStatus`; added optional `onStatus` callback |
-| `components/ChatInterface.tsx` | Passes `onStatus` callback → loading indicator shows real-time tool-call status |
-
-The in-process `requestStatus` map still works — worker runs in the same Node.js process so granular status ("Calling calculate cost summary…") flows through to the polling endpoint unchanged.
+| 1 | Monorepo scaffold — npm workspaces, shared tsconfig, concurrently dev runner |
+| 2 | Parse & ingest — PDF per-page + Excel row-batch, chunker with overlap, Multer upload route |
+| 3 | AI agent — GPT function-calling loop, 5 initial tools, document metadata extraction |
+| 4 | Frontend — Next.js chat interface, drag-and-drop upload, source citations, tool badges |
+| 5 | Semantic search — `text-embedding-3-small` embeddings, pgvector cosine similarity, FTS fallback |
+| 6 | Structured JSON responses — typed section schema, system prompt rewrite, `StructuredAnswer.tsx` renderer |
+| 7 | PostgreSQL persistence — Drizzle ORM, pgvector, BullMQ upload queue, conversation history |
+| 8 | Structured value extraction — deterministic Excel column classifier, per-page LLM extraction for PDFs |
+| 9 | Tool expansion (5 → 11) — `calculate_cost_summary`, `compare_costs`, `extract_quantities`, `extract_parties`, `extract_percentages`, `get_document_sections`; `category` filter added |
+| 10 | Refactor pass — dead code removed, misleading names fixed, model name bug corrected, broken polling removed |
+| 11 | Async ask queue — `POST /api/ask` converted from blocking to BullMQ job, eliminates socket hangouts |
 
 ---
 
 ## Key Design Decisions
 
-**Function calling over prompt stuffing** — the agent uses GPT tool calls to run targeted SQL queries instead of dumping all document text into the prompt. Keeps each LLM call focused, reduces token cost, produces grounded answers.
+**Function calling over prompt stuffing**
+The agent runs targeted SQL queries via GPT tool calls instead of dumping document text into the prompt. Every factual claim in the answer is grounded in tool output. Token cost stays low regardless of how many documents are loaded.
 
-**Structured JSON responses** — the AI returns a typed schema, not markdown. The frontend owns all presentation. The same data can be rendered differently in different contexts without touching the backend.
+**Structured JSON responses, never markdown**
+The AI returns a typed schema (`title`, `summary`, `sections[]`). The frontend owns all presentation decisions — the same data renders differently as a table, timeline, or fact grid depending on the section type. This makes the AI output predictable and the UI extensible without touching the backend.
 
-**AI/frontend separation** — AI never attempts to format output (no markdown tables, no bullet dashes). The frontend components own all visual decisions.
+**Deterministic Excel extraction**
+Column classification and value extraction for Excel files are fully regex-based — zero tokens per row. LLM extraction is only used for PDFs where layout is unpredictable. This keeps ingestion cost proportional to PDF pages, not spreadsheet size.
 
-**Deterministic Excel extraction** — column classification and value extraction are regex-based, not LLM-based. Zero tokens consumed per row. LLM extraction is reserved for PDFs where structure is unpredictable.
+**Two-pass ingestion**
+Every file goes through both chunking (for search) and structured extraction (for direct SQL queries). The `extracted_values` table lets the agent answer "what is the total MEP budget?" with a single SQL aggregate — no vector search, no AI calls at query time.
 
-**Dual-mode search** — pgvector cosine similarity at query time; PostgreSQL full-text search as fallback. Both return the same shape so the rest of the stack is unaffected.
+**Async job queues for everything**
+Both file uploads and question answering use BullMQ + Redis. The HTTP connection closes immediately; the frontend polls for results. This eliminates socket hangouts on long operations and makes both flows consistent.
 
-**Shared ingestion pipeline** — `ingestFile()` in `services/ingestion.ts` is the single implementation of parse → embed → classify → extract → store. Both the folder-ingest and file-upload routes call it identically.
-
-**Async upload queue** — BullMQ with concurrency 1 prevents hammering OpenAI rate limits while allowing the UI to show per-file progress. Files are cleaned from temp storage in the worker's `finally` block.
-
-**Cascade deletes** — `chunks` and `extracted_values` reference `documents` with `ON DELETE CASCADE`. A single `DELETE FROM documents WHERE id = $1` cleans up everything.
+**Cascade deletes**
+`chunks` and `extracted_values` both have `ON DELETE CASCADE` on `documents`. Deleting a document is a single SQL statement — no manual cleanup.
 
 ---
 
-## Known Limitations
+## What I Would Improve Given More Time
 
-1. **OCR** — `pdf-parse` can't extract text from image-based or scanned PDFs
-2. **Streaming** — answers are buffered then sent; no token-by-token streaming to the UI
-3. **Authentication** — no auth; all documents, conversations, and answers are globally accessible
-4. **Multi-user isolation** — one shared document store per server instance; all sessions see the same documents
-5. **Excel merged cells** — merged cells in data rows can confuse column counting; header merged cells are handled by the header-row detection logic
+**Authentication and multi-user isolation**
+Right now all documents and conversations are globally shared. Adding per-user document namespacing and JWT-based auth is the most important production gap. Every query, tool call, and ingestion job would need to carry a `userId` and filter accordingly.
+
+**Streaming responses**
+The agent loop buffers the full answer before sending. Streaming each token to the UI as it's generated would make the product feel significantly faster, especially for long answers. The BullMQ polling approach would need to be replaced or augmented with Server-Sent Events or WebSockets.
+
+**OCR support**
+`pdf-parse` cannot read image-based or scanned PDFs — a common format in construction document management. Integrating a proper OCR pipeline (e.g. AWS Textract or Azure Document Intelligence) would make the system usable with the majority of real-world project archives.
+
+**Conversation-aware agent**
+The agent currently receives only the current question. It does not have access to prior turns in the conversation. Feeding recent message history into the agent's context would allow follow-up questions ("and what about phase 2?") to resolve correctly without repeating context.
+
+**Excel merged cell handling**
+Merged cells in data rows (not just header rows) can cause column misalignment in the extraction pass. A more robust approach would resolve merged cell spans before column classification, not just detect and skip merged header rows.
+
+**Retry and partial failure handling**
+If a PDF extraction batch fails mid-document (network error, rate limit), the whole document is marked failed. Per-page retry with exponential backoff would make large-document ingestion more resilient.
