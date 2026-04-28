@@ -9,6 +9,7 @@ import { createError } from '../utils/errorHandler.js';
 
 const router = Router();
 
+// This route handles the ingestion of documents from a specified folder path. It validates the request body to ensure a valid folder path is provided, checks for the existence and type of the path, and processes supported files (.pdf, .xlsx, .xls, .csv) found in the directory. The route clears the existing document store before ingesting new files and returns a summary of the ingestion results, including any warnings encountered during processing.
 router.post('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const parsed = ingestSchema.safeParse(req.body);

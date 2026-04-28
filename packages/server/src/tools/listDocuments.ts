@@ -4,6 +4,10 @@ import { ToolResult } from '../types/index.js';
 
 interface SheetRow { document_id: string; sheet_names: string[] }
 
+// This tool lists all currently loaded documents with their metadata, including file name, format, number of pages/sheets, and any extracted metadata such as project name or currency.
+// It also provides the distinct sheet names for each document to help the AI understand the structure of Excel files. 
+// The output is a human-readable list of documents that can be used as a reference for calling other tools with specific document IDs or sheet names.
+
 export async function listDocuments(): Promise<ToolResult> {
   const docs = await documentStore.getAll();
 

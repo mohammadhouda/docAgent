@@ -9,6 +9,10 @@ interface SummaryRow {
   currency:    string | null;
 }
 
+// This tool calculates the total cost and item count grouped by section/trade (sheet_name) or by document (for PDFs without sheets).
+// It accepts an optional documentId to filter by a specific document, and an optional category keyword that matches either the sheet name or item label.
+// The output includes the grand total cost across all groups, the currency, and an array of groups with their totals and item counts.
+// for example, it can be used to get a cost summary of a BOQ document broken down by trade sections, or to compare costs across different documents. The sources cite the totals for each group for transparency.
 export async function calculateCostSummary(args: {
   documentId?: string;
   category?:   string;
@@ -16,9 +20,6 @@ export async function calculateCostSummary(args: {
   const { documentId, category } = args;
   const likeFilter = category ? `%${category}%` : null;
 
-  // Group by sheet_name (section/trade for Excel) or document when sheet is null (PDF).
-  // category filter matches sheet name OR item label — handles both sheet-per-trade layouts
-  // and single-sheet BOQs where the trade appears in item descriptions.
   const result = await pool.query<SummaryRow>(
     `SELECT
        COALESCE(ev.sheet_name, d.file_name) AS group_key,

@@ -13,6 +13,9 @@ interface UnitRateRow {
   file_name:  string;
 }
 
+// This tool calculates unit rates for items in a BOQ document by dividing cost by quantity for rows where both values are present.
+// It accepts an optional item keyword to filter by item label, and an optional documentId to filter by a specific document.
+// The output includes the calculated unit rates along with the source information for citation.
 export async function calculateUnitRate(args: {
   item?:       string;
   documentId?: string;

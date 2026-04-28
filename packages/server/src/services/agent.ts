@@ -8,6 +8,7 @@ import { AskResponse, ConversationMessage, SourceReference, StructuredAnswer } f
 
 const MODEL = 'gpt-5.4-mini';
 
+// This service implements the core agent loop that processes user questions, interacts with the OpenAI API, executes tools, and synthesizes answers. It maintains the conversation history and tracks sources and tools used throughout the interaction. The agent iteratively calls the language model to determine which tools to use and when to stop and generate a final answer based on the accumulated information.
 function parseStructuredAnswer(raw: string): StructuredAnswer {
   try {
     const parsed = JSON.parse(raw);
@@ -20,6 +21,8 @@ function parseStructuredAnswer(raw: string): StructuredAnswer {
   return { title: 'Answer', sections: [{ type: 'paragraph', content: raw }] };
 }
 
+// This function builds the message array for the OpenAI chat completion API. It includes the system prompt, the conversation history, and the current user question. The conversation history is mapped to the appropriate roles (user or assistant) to maintain context in the dialogue.
+
 function buildMessages(
   question: string,
   history: ConversationMessage[],
@@ -31,6 +34,7 @@ function buildMessages(
   ];
 }
 
+// This function deduplicates source references by their document name and location. It ensures that the same source is not cited multiple times in the final answer, which helps to keep the list of sources concise and relevant. The deduplication is based on a combination of document name and location to account for different references within the same document.
 function deduplicateSources(sources: SourceReference[]): SourceReference[] {
   const seen = new Set<string>();
   return sources.filter((s) => {
@@ -43,6 +47,7 @@ function deduplicateSources(sources: SourceReference[]): SourceReference[] {
 
 const FALLBACK_ANSWER = '{"title":"Answer","sections":[{"type":"paragraph","content":"I processed the documents but could not generate a conclusive answer."}]}';
 
+// This function implements the main agent loop. It takes a user question, conversation history, and an optional request ID for status updates. It interacts with the OpenAI API to determine which tools to call based on the question and accumulated information. The loop continues until the model indicates that it has enough information to generate a final answer or until a maximum number of iterations is reached. The function returns a structured answer along with the sources cited and tools used during the process.
 export async function runAgent(
   question: string,
   signal: AbortSignal,
@@ -115,7 +120,7 @@ export async function runAgent(
     messages.push(...toolResults);
   }
 
-  // Max iterations reached — one final synthesis call without tools
+  // If we reach the maximum number of iterations without a stop signal, we proceed to generate a final answer based on the accumulated information. This is a fallback mechanism to ensure that the agent provides a response even if it doesn't explicitly indicate that it's done.
   updateStatus('Preparing final answer…');
   const finalResponse = await openaiClient.chat.completions.create(
     { model: MODEL, messages, temperature: 0 },

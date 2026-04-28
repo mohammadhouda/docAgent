@@ -5,6 +5,8 @@ export interface AppError extends Error {
   details?: string;
 }
 
+// This is a centralized error handling middleware for the Express server. It captures any errors thrown in the route handlers or other middleware, logs the error details, and sends a structured JSON response with an appropriate HTTP status code and error message.
+
 export function errorHandler(
   err: AppError,
   _req: Request,

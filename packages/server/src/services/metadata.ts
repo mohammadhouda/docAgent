@@ -1,7 +1,7 @@
 import { openaiClient } from './openai.js';
 import { DocumentMetadata } from '../types/index.js';
 
-// Extracts structured metadata from the first few chunks of a document's text using an LLM
+// This service is responsible for extracting structured metadata from document excerpts using the OpenAI API. It takes the text of the first few chunks of a document and its filename as input, and returns metadata such as document type, project name, dominant currency, involved parties, and a brief summary. The function handles potential errors gracefully by logging them and returning default metadata values when extraction fails.
 export async function extractDocumentMetadata(
   firstChunksText: string,
   fileName: string,

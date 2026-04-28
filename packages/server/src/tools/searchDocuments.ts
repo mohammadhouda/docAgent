@@ -2,6 +2,9 @@ import { documentStore } from '../services/documentStore.js';
 import { generateEmbedding } from '../services/embeddings.js';
 import { Document, DocumentChunk, SourceReference, ToolResult } from '../types/index.js';
 
+// This tool performs a search across all loaded documents using either semantic similarity (if embeddings are available) or keyword matching as a fallback.
+// It accepts a query string and an optional maximum number of results to return. The output includes the matched content along with source citations for transparency.
+
 export async function searchDocuments(args: {
   query: string;
   maxResults?: number;

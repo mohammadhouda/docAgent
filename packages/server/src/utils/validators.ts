@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import path from 'path';
 
+// This module defines Zod schemas for validating the input to various API endpoints in the server. It ensures that incoming data adheres to expected formats and constraints, providing early feedback on invalid input and preventing potential errors further down the processing pipeline.
+
 const conversationMessageSchema = z.object({
   role: z.enum(['user', 'assistant']),
   content: z.string().max(5000),

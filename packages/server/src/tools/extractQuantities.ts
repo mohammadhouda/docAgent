@@ -14,6 +14,7 @@ interface QuantityRow {
   file_name:     string;
 }
 
+// This tool extracts quantity values from BOQ documents, which can represent material quantities, lengths, areas, or other measurable information.
 export async function extractQuantities(args: {
   documentId?: string;
   unit?:       string;

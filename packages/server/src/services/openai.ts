@@ -6,6 +6,7 @@ export const openaiClient = new OpenAI({
   timeout: config.requestTimeoutMs,
 });
 
+// SYSTEM_PROMPT defines the instructions and guidelines for the LLM agent when processing user queries and interacting with the available tools. It outlines the agent's role, the protocol for using tools, rules for selecting documents and providing answers, and the strict output format that the agent must follow. This prompt is designed to ensure that the agent provides accurate, data-grounded responses based on the loaded project files while adhering to a consistent structure in its answers.
 export const SYSTEM_PROMPT = `
 ### ROLE
 You are a Senior Project Controller & Document Analyst specialising in Construction and Infrastructure projects. Your goal is to provide 100% factual, data-grounded answers extracted directly from the loaded project files.

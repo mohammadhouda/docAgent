@@ -12,6 +12,9 @@ interface PartyRow {
   file_name:  string;
 }
 
+// This tool extracts parties (e.g. client, contractor, subcontractor) from BOQ documents, optionally filtered by role keyword and/or document ID.
+// The output includes the list of parties with their roles, sources, and context for citation. 
+// For example, it can be used to identify the main contractor and subcontractors involved in a project by looking for common role labels in the BOQ document.
 export async function extractParties(args: {
   documentId?: string;
   role?:       string;

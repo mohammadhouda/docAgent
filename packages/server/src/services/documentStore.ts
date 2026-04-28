@@ -4,9 +4,7 @@ import { chunks, documents, extractedValues, ChunkRow, DocumentRow } from '../db
 import { Document, DocumentChunk, DocumentMetadata } from '../types/index.js';
 import { ExtractedValue } from '../extractors/types.js';
 
-// ─── Raw query row types ─────────────────────────────────────────────────────
-
-// Shape returned by the similarity + keyword search JOIN queries
+// This service manages the storage and retrieval of documents and their associated chunks and extracted values. It provides methods to add new documents, clear the store, retrieve all documents or a specific document by ID, find a document by a selector (ID or filename), check for the existence of embeddings, count the total number of documents, and perform similarity and keyword searches. The service abstracts the database operations related to documents, allowing other parts of the application to interact with it without needing to know the underlying database details.
 interface SearchRow {
   id:               string;
   file_name:        string;
@@ -30,8 +28,7 @@ interface SearchRow {
   next_content:     string | null;
 }
 
-// ─── Row → Domain mappers ────────────────────────────────────────────────────
-
+// This function maps a ChunkRow to the DocumentChunk domain model.
 function toChunk(row: ChunkRow): DocumentChunk {
   return {
     id:         row.id,
@@ -47,6 +44,7 @@ function toChunk(row: ChunkRow): DocumentChunk {
   };
 }
 
+// This function maps a DocumentRow and its associated ChunkRows to the Document domain model. It constructs the Document object with its metadata and an array of chunks. The metadata is extracted from the DocumentRow, while the chunks are created by mapping each ChunkRow using the toChunk function. This allows us to work with a rich Document object in our application logic, abstracting away the raw database row structure.
 function toDocument(docRow: DocumentRow, chunkRows: ChunkRow[]): Document {
   const metadata: DocumentMetadata = {
     type:        (docRow.metaType as DocumentMetadata['type']) ?? 'other',
@@ -68,9 +66,7 @@ function toDocument(docRow: DocumentRow, chunkRows: ChunkRow[]): Document {
   };
 }
 
-// Builds a { chunk, document } pair from a flat search JOIN row.
-// Uses a sparse array indexed by chunkIndex so callers can access
-// document.chunks[chunkIndex + 1] for context continuity.
+// This function builds the search result object by combining the matched chunk with its parent document. It also includes the next chunk's content (if available) to provide additional context for the agent when processing the search results. The resulting object contains both the specific chunk that matched the search criteria and the overall document information, allowing for a richer response to user queries.
 function buildSearchResult(r: SearchRow): { chunk: DocumentChunk; document: Document } {
   const chunkRow: ChunkRow = {
     id:         r.chunk_id,
@@ -109,14 +105,13 @@ function buildSearchResult(r: SearchRow): { chunk: DocumentChunk; document: Docu
     metaSummary:     r.meta_summary,
   };
 
-  // Pass sparseChunks so the document retains context-window chunks
+  // The document's chunks array will be mostly empty except for the matched chunk and its immediate successor (if any). This allows the agent to access the next chunk for additional context without needing a separate query, while keeping memory usage efficient.
   return { chunk, document: { ...toDocument(docRow, [chunkRow]), chunks: sparseChunks } };
 }
 
 // ─── Store ───────────────────────────────────────────────────────────────────
 
 class DocumentStore {
-  // --- Write -----------------------------------------------------------------
 
   async addDocument(doc: Document): Promise<void> {
     await db.insert(documents).values({
@@ -181,8 +176,6 @@ class DocumentStore {
     await db.delete(documents);
   }
 
-  // --- Read (Drizzle query builder) ------------------------------------------
-
   async getAll(): Promise<Document[]> {
     const rows = await db
       .select()
@@ -241,9 +234,8 @@ class DocumentStore {
     return parseInt(result.rows[0].count, 10);
   }
 
-  // --- Search (raw pg for vector/FTS operators) ------------------------------
 
-  // Cosine similarity via pgvector's <=> operator.
+  // Similarity search using pgvector's <=> operator for cosine distance ranking.
   async searchBySimilarity(
     queryEmbedding: number[],
     maxResults = 8,

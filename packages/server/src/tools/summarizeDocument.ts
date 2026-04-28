@@ -1,6 +1,10 @@
 import { documentStore } from '../services/documentStore.js';
 import { SourceReference, ToolResult } from '../types/index.js';
 
+// This tool generates a summary of a document by sampling content from the beginning, middle, and end of the document's chunks.
+// This approach ensures that the summary captures the overall structure and key points of the document, rather than just the opening section.
+// The output includes the sampled content along with source citations for transparency and reference.
+
 export async function summarizeDocument(args: { documentId: string }): Promise<ToolResult> {
   const doc = await documentStore.findDocument(args.documentId);
 

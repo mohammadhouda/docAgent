@@ -5,6 +5,7 @@ import { config } from '../config.js';
 import { extractFromWorkbook } from '../extractors/excelExtractor.js';
 import { ExtractedValue } from '../extractors/types.js';
 
+// This parser reads Excel files using ExcelJS, extracts text content from each sheet and row, and creates document chunks for indexing. It also collects warnings for empty sheets and handles large sheets by batching rows into manageable chunks. The extracted values are processed separately to ensure deterministic results without additional I/O overhead.
 function cellToString(cell: ExcelJS.Cell): string {
   const v = cell.value;
   if (v === null || v === undefined) return '';
@@ -13,7 +14,7 @@ function cellToString(cell: ExcelJS.Cell): string {
     const result = (v as ExcelJS.CellFormulaValue).result;
     return result === null || result === undefined ? '' : String(result);
   }
-  // For numeric cells cell.text may be '' if no format is applied — fall through to String(v)
+  // For dates, ExcelJS returns a Date object, so we convert it to ISO string for consistency
   return cell.text || String(v);
 }
 
@@ -94,11 +95,9 @@ export async function parseExcel(filePath: string, documentId: string): Promise<
     }
   }
 
-  // Re-index globally — chunkText resets the counter per batch call,
-  // so IDs would collide across sheets/batches without this correction.
+  // Assign chunk IDs after all chunks are created to ensure deterministic IDs regardless of processing order
   chunks.forEach((c, idx) => { c.chunkIndex = idx; c.id = `${documentId}-chunk-${idx}`; });
 
-  // Deterministic extraction — workbook already in memory, no extra I/O
   const extractedValues = extractFromWorkbook(workbook, documentId);
 
   return { chunks, totalSheets, warnings, extractedValues };

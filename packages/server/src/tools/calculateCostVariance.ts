@@ -10,6 +10,11 @@ interface DocTotalRow {
   currency:    string | null;
 }
 
+// This tool calculates the cost variance between two BOQ documents. It retrieves the total cost for each document (optionally filtered by category), 
+// then computes the absolute and percentage difference. 
+// The output includes which document is higher/lower cost, and the sources cite the totals for each document.
+// for example, it can be used to compare the original BOQ with a revised version to see how costs have changed overall and by category/section if specified.
+
 export async function calculateCostVariance(args: {
   documentIdA: string;
   documentIdB: string;

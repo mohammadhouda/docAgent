@@ -18,7 +18,7 @@ const upload = multer({
   limits: { fileSize: 100 * 1024 * 1024 },
 });
 
-// POST /api/upload — queue ingestion jobs and return immediately
+// this route handles file uploads via multipart/form-data. It processes multiple files, validates their types, and enqueues them for ingestion. The route also clears the existing document store before processing new uploads to ensure a clean state. The response includes the job IDs for tracking the ingestion status of each uploaded file.
 router.post(
   '/',
   upload.array('files', 100),

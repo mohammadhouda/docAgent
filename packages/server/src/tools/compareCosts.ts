@@ -21,6 +21,7 @@ interface DocTotal {
   item_count:  number;
 }
 
+// This tool compares costs across multiple BOQ documents, optionally filtered by category (e.g. trade/section).
 export async function compareCosts(args: {
   category?:    string;
   documentIds?: string[];

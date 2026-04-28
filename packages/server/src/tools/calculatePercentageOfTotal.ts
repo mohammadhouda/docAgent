@@ -13,6 +13,10 @@ interface GroupRow {
   subtotal:  number;
 }
 
+// This tool calculates the percentage of total cost for a given category (e.g. a trade or section) within a BOQ document.
+// It accepts a category keyword and an optional documentId to filter by a specific document. 
+// The output includes the category total, grand total, percentage, and a breakdown of matching groups for citation.
+// for example, if the category is "Electrical", it will calculate the total cost of all items in the Electrical section and divide by the grand total cost to get the percentage.
 export async function calculatePercentageOfTotal(args: {
   category:   string;
   documentId?: string;

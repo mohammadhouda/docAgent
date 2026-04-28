@@ -13,6 +13,7 @@ interface DateRow {
   file_name:   string;
 }
 
+// This tool extracts date values from BOQ documents, which can represent milestones, delivery dates, or other schedule-related information.
 export async function extractDatesDeliverables(args: { documentId?: string }): Promise<ToolResult> {
   const { documentId } = args;
 

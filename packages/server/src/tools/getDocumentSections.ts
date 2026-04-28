@@ -16,6 +16,9 @@ interface PrefixRow {
   item_count:  number;
 }
 
+// This tool provides a breakdown of document sections based on sheet names and item-code prefixes in BOQ documents.
+// It helps identify the structure of the document, such as how many items and total costs are associated with each sheet (which often corresponds to trades or sections in a BOQ).
+// Additionally, it extracts common item-code prefixes which can indicate different categories or types of items, especially in single-sheet BOQs where sheet names may not be used.
 export async function getDocumentSections(args: {
   documentId?: string;
 }): Promise<ToolResult> {

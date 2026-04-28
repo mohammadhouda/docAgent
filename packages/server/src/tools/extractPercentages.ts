@@ -13,6 +13,7 @@ interface PctRow {
   file_name:     string;
 }
 
+// This tool extracts percentage values from BOQ documents, which can represent progress, completion rates, or other percentage-based information.
 export async function extractPercentages(args: {
   documentId?: string;
 }): Promise<ToolResult> {

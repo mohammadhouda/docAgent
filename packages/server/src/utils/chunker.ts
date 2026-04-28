@@ -1,6 +1,11 @@
 import { DocumentChunk } from '../types/index.js';
 import { config } from '../config.js';
 
+
+// This utility function takes a large text string and breaks it into smaller chunks based on the configured chunk size and overlap.
+// It attempts to split at paragraph boundaries first, then sentence boundaries, to preserve context as much as possible.
+// Each chunk is associated with metadata such as page number, sheet name, and row range for better traceability back to the source document.
+
 export function chunkText(
   text: string,
   documentId: string,

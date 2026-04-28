@@ -14,6 +14,9 @@ interface CostRow {
   file_name:     string;
 }
 
+// This tool extracts cost items from BOQ documents based on optional filters such as minimum/maximum amount, category (matching sheet name or item label), currency, and document ID.
+// The output includes the list of cost items with their amounts, currencies, sources, and context for citation. 
+// For example, it can be used to extract all cost items above a certain threshold in a specific section of a BOQ document.
 export async function extractCostItems(args: {
   minAmount?:  number;
   maxAmount?:  number;

@@ -1,5 +1,6 @@
 import { ToolResult } from '../types/index.js';
 
+// This tool computes the difference between two numeric values, along with the percentage difference and which value is higher/lower.
 export async function computeDifference(args: {
   valueA:  number;
   labelA?: string;

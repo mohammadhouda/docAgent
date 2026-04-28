@@ -3,6 +3,7 @@ import { documentStore } from '../services/documentStore.js';
 
 const router = Router();
 
+// This route deletes all documents from the document store. It is a bulk operation that clears the entire collection of documents, which can be useful for resetting the state during development or testing. The response indicates whether the operation was successful.
 router.delete('/', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     await documentStore.clear();
@@ -12,6 +13,7 @@ router.delete('/', async (_req: Request, res: Response, next: NextFunction) => {
   }
 });
 
+// This route retrieves a list of all documents in the document store along with their metadata. It returns an array of document summaries, including details such as file name, type, page count, chunk count, and ingestion date. This allows clients to view the available documents and their attributes without needing to access the full content.
 router.get('/', async (_req: Request, res: Response) => {
   const docs = (await documentStore.getAll()).map((doc) => ({
     id:          doc.id,

@@ -4,6 +4,7 @@ import { createError } from '../utils/errorHandler.js';
 
 const router = Router();
 
+// This route creates a new conversation with an optional title. It generates a unique conversation ID and returns it in the response. The title is truncated to 120 characters to prevent excessively long titles from being stored or displayed.
 router.post('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const title = String(req.body?.title ?? 'New Conversation').slice(0, 120);
@@ -14,6 +15,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
   }
 });
 
+// This route retrieves the messages for a specific conversation by its ID. It checks if the conversation exists and returns the message history in the response. If the conversation is not found, it responds with a 404 error.
 router.get('/:id/messages', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
@@ -27,6 +29,7 @@ router.get('/:id/messages', async (req: Request, res: Response, next: NextFuncti
   }
 });
 
+// This route deletes a conversation by its ID. It checks if the conversation exists and deletes it from the store. If the conversation is not found, it responds with a 404 error. On successful deletion, it returns a success message in the response.
 router.delete('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     await conversationStore.delete(req.params.id);

@@ -13,13 +13,7 @@ export interface IngestedFileResult {
   warnings: string[];
 }
 
-/**
- * Ingests a document file by parsing its content, 
- * generating embeddings for text chunks, extracting metadata,
- * and storing everything in the database. 
- * Returns a summary of the ingestion result, 
- * including any warnings encountered during parsing.
- */
+// This service handles the ingestion of uploaded documents. It parses the file to extract text chunks, generates embeddings for those chunks, extracts metadata, and stores everything in the document store. The function returns a summary of the ingestion process, including any warnings that were generated during parsing. It is designed to be called by the ingestion worker when processing jobs from the queue.
 
 export async function ingestFile(
   filePath: string,

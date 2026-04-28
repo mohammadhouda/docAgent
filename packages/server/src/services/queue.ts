@@ -19,7 +19,7 @@ export interface AskJobData {
   requestId:      string;
 }
 
-// Parse redis://host:port into BullMQ connection options
+// This function parses the Redis connection URL from the configuration and returns an object with the connection options for BullMQ. It supports URLs with optional authentication and ensures that the password is properly decoded if present. This allows the application to connect to a Redis instance for managing the job queues used in document ingestion and question answering.
 function redisOpts() {
   const url = new URL(config.redisUrl);
   return {
@@ -29,6 +29,7 @@ function redisOpts() {
   };
 }
 
+// This module sets up two BullMQ queues: one for document ingestion and another for processing user questions. It defines the data structures for the jobs in each queue and provides functions to create workers that will process the jobs. The ingestion worker handles the parsing and storage of uploaded documents, while the ask worker implements the agent loop to generate answers based on user questions and conversation history. Both workers include error handling to ensure that any issues during job processing are logged and that temporary resources are cleaned up appropriately.
 export const ingestionQueue = new Queue<IngestJobData, IngestedFileResult>('ingestion', {
   connection: redisOpts(),
   defaultJobOptions: {
@@ -47,6 +48,7 @@ export const askQueue = new Queue<AskJobData, AskResponse>('ask', {
   },
 });
 
+// This function creates a worker for processing user questions. It listens to the 'ask' queue and executes the runAgent function for each job, which implements the core agent loop to generate answers based on the user's question and conversation history. The worker is configured to process multiple jobs concurrently to allow for responsive interactions. If a job fails, it logs the error and ensures that any associated request status is cleaned up to prevent stale states in the application.
 export function createAskWorker() {
   const worker = new Worker<AskJobData, AskResponse>(
     'ask',
@@ -83,6 +85,7 @@ export function createAskWorker() {
   return worker;
 }
 
+// This function creates a worker for processing document ingestion jobs. It listens to the 'ingestion' queue and executes the ingestFile function for each job, which handles the parsing and storage of uploaded documents. The worker is configured to process one job at a time to avoid overloading the server, especially since PDF parsing can be resource-intensive. If a job fails, it logs the error and ensures that any temporary files are cleaned up to prevent storage issues.
 export function createIngestionWorker() {
   const worker = new Worker<IngestJobData, IngestedFileResult>(
     'ingestion',

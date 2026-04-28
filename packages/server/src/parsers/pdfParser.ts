@@ -57,8 +57,7 @@ export async function parsePdf(filePath: string, documentId: string): Promise<Pd
     chunks.push(...pageChunks);
   }
 
-  // Re-index chunkIndex and id globally — chunkText resets the counter per
-  // page call, so IDs would collide across pages without this correction.
+  // Assign chunk IDs after all chunks are created to ensure deterministic IDs regardless of processing order
   chunks.forEach((c, idx) => { c.chunkIndex = idx; c.id = `${documentId}-chunk-${idx}`; });
 
   // AI extraction per page — pageTexts already in memory, no extra file read

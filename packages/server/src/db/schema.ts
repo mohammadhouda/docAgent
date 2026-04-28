@@ -1,7 +1,6 @@
 import { pgTable, text, uuid, integer, timestamp, customType, jsonb, doublePrecision, date } from 'drizzle-orm/pg-core';
 
-// pgvector column — stores 1536-dim embeddings from text-embedding-3-small.
-// Serialised as "[x,y,z,...]" string on the wire.
+// This module defines the database schema for the application using Drizzle ORM. It includes tables for documents, chunks of text extracted from those documents, conversations between users and the assistant, messages within those conversations, and extracted values such as costs and dates. The schema also defines the types for rows in each table, which are used throughout the application to ensure type safety when interacting with the database.
 const vector = customType<{ data: number[]; driverData: string }>({
   dataType() {
     return 'vector(1536)';

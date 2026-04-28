@@ -14,6 +14,7 @@ export interface StoredMessage {
   createdAt: Date;
 }
 
+// This service manages conversations and messages in the database. It provides methods to create new conversations, check for their existence, add messages to a conversation, retrieve messages for a conversation, and delete conversations. The messages can include user inputs, assistant responses, cited sources, and tools used during the interaction. The service abstracts the database operations related to conversations and messages, allowing other parts of the application to interact with it without needing to know the underlying database details.
 function toStoredMessage(row: MessageRow): StoredMessage {
   return {
     id:        row.id,

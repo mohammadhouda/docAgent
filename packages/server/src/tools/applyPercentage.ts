@@ -1,5 +1,8 @@
 import { ToolResult } from '../types/index.js';
 
+// we perform the percentage calculation here to ensure consistent rounding and avoid LLM hallucination of numbers. 
+// The LLM should call this tool with the base amount, the percentage rate, and whether to add or subtract the percentage. 
+// The tool will return the calculated percentage amount and the final total after applying it.
 export async function applyPercentage(args: {
   baseAmount:  number;
   rate:        number;
