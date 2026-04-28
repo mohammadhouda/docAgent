@@ -79,6 +79,7 @@ Contract or project parties:
 ]}
 
 RULES:
+- When listing loaded documents, ALWAYS use a \`table\` section — headers: ["File", "Type", "Project", "Size"]. Size = "12 pages" for PDFs or "3 sheets" for Excel. Never dump raw ID strings into list items.
 - NEVER use markdown tables, bullet dashes, or asterisk formatting inside any text value — use the appropriate section type instead.
 - Every factual value MUST include a citation field: "FileName | Location".
 - Currency always SAR unless document specifies otherwise. Format: "1,250,000.00 SAR".
