@@ -1,5 +1,6 @@
 import { pool } from '../db/client.js';
-import { SourceReference, ToolResult } from '../types/index.js';
+import { ToolResult } from '../types/index.js';
+import { buildSources, formatLocation, likeParam } from './utils.js';
 
 interface QuantityRow {
   label:         string;
@@ -8,6 +9,7 @@ interface QuantityRow {
   unit:          string | null;
   context:       string;
   sheet_name:    string | null;
+  page_number:   number | null;
   row_number:    number | null;
   file_name:     string;
 }
@@ -22,7 +24,7 @@ export async function extractQuantities(args: {
   const result = await pool.query<QuantityRow>(
     `SELECT
        ev.label, ev.raw_value, ev.numeric_value, ev.unit,
-       ev.context, ev.sheet_name, ev.row_number,
+       ev.context, ev.sheet_name, ev.page_number, ev.row_number,
        d.file_name
      FROM extracted_values ev
      JOIN documents d ON ev.document_id = d.id
@@ -32,30 +34,24 @@ export async function extractQuantities(args: {
        AND (ev.numeric_value IS NULL OR ev.numeric_value >= $3)
      ORDER BY ev.numeric_value DESC NULLS LAST
      LIMIT 200`,
-    [documentId ?? null, unit ? `%${unit}%` : null, minValue],
+    [documentId ?? null, likeParam(unit), minValue],
   );
 
   if (result.rows.length === 0) {
     return { success: false, data: 'No quantity items found.', sources: [] };
   }
 
-  const sources: SourceReference[] = result.rows.map((r) => ({
-    documentName: r.file_name,
-    location:     r.sheet_name ? `Sheet: ${r.sheet_name}, Row ${r.row_number}` : `Page ${r.row_number}`,
-    excerpt:      r.context.slice(0, 150),
-  }));
-
   const items = result.rows.map((r) => ({
     label:    r.label,
     quantity: r.numeric_value,
     unit:     r.unit,
     source:   r.file_name,
-    location: r.sheet_name ? `Sheet: ${r.sheet_name}, Row ${r.row_number}` : `Page ${r.row_number}`,
+    location: formatLocation(r),
   }));
 
   return {
     success: true,
-    data: { items, totalItems: items.length },
-    sources,
+    data:    { items, totalItems: items.length },
+    sources: buildSources(result.rows),
   };
 }

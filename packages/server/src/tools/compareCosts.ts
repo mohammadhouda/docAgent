@@ -1,5 +1,6 @@
 import { pool } from '../db/client.js';
-import { SourceReference, ToolResult } from '../types/index.js';
+import { ToolResult } from '../types/index.js';
+import { buildSources, likeParam } from './utils.js';
 
 interface CompareRow {
   file_name:     string;
@@ -8,37 +9,40 @@ interface CompareRow {
   numeric_value: number | null;
   unit:          string | null;
   sheet_name:    string | null;
+  page_number:   number | null;
   row_number:    number | null;
   context:       string;
 }
 
 interface DocTotal {
-  file_name:    string;
-  document_id:  string;
-  total:        number;
-  item_count:   number;
+  file_name:   string;
+  document_id: string;
+  total:       number;
+  item_count:  number;
 }
 
 export async function compareCosts(args: {
-  category?: string;
+  category?:    string;
   documentIds?: string[];
 }): Promise<ToolResult> {
   const { category, documentIds } = args;
 
   const idsFilter  = documentIds && documentIds.length > 0 ? documentIds : null;
-  const likeFilter = category ? `%${category}%` : null;
+  const likeFilter = likeParam(category);
 
   // Per-item breakdown across documents
   const rows = await pool.query<CompareRow>(
     `SELECT d.file_name, d.id AS document_id,
             ev.label, ev.numeric_value, ev.unit,
-            ev.sheet_name, ev.row_number, ev.context
+            ev.sheet_name, ev.page_number, ev.row_number, ev.context
      FROM extracted_values ev
      JOIN documents d ON ev.document_id = d.id
      WHERE ev.type = 'cost'
        AND ev.numeric_value IS NOT NULL
-       AND ($1::text    IS NULL OR ev.label ILIKE $1)
-       AND ($2::uuid[]  IS NULL OR ev.document_id = ANY($2::uuid[]))
+       AND ($1::text IS NULL
+            OR COALESCE(ev.sheet_name, d.file_name) ILIKE $1
+            OR ev.label ILIKE $1)
+       AND ($2::uuid[] IS NULL OR ev.document_id = ANY($2::uuid[]))
      ORDER BY ev.numeric_value DESC
      LIMIT 300`,
     [likeFilter, idsFilter],
@@ -53,7 +57,9 @@ export async function compareCosts(args: {
      JOIN documents d ON ev.document_id = d.id
      WHERE ev.type = 'cost'
        AND ev.numeric_value IS NOT NULL
-       AND ($1::text   IS NULL OR ev.label ILIKE $1)
+       AND ($1::text IS NULL
+            OR COALESCE(ev.sheet_name, d.file_name) ILIKE $1
+            OR ev.label ILIKE $1)
        AND ($2::uuid[] IS NULL OR ev.document_id = ANY($2::uuid[]))
      GROUP BY d.file_name, d.id
      ORDER BY total DESC`,
@@ -63,12 +69,6 @@ export async function compareCosts(args: {
   if (rows.rows.length === 0) {
     return { success: false, data: 'No matching cost items found across documents.', sources: [] };
   }
-
-  const sources: SourceReference[] = rows.rows.map((r) => ({
-    documentName: r.file_name,
-    location:     r.sheet_name ? `Sheet: ${r.sheet_name}, Row ${r.row_number}` : '',
-    excerpt:      r.context.slice(0, 150),
-  }));
 
   // Group items by document for a structured comparison
   const byDoc = new Map<string, { fileName: string; items: typeof rows.rows }>();
@@ -81,10 +81,10 @@ export async function compareCosts(args: {
     success: true,
     data: {
       summary: totals.rows.map((t) => ({
-        document:   t.file_name,
-        totalCost:  t.total,
-        itemCount:  t.item_count,
-        currency:   rows.rows.find((r) => r.document_id === t.document_id)?.unit ?? 'SAR',
+        document:  t.file_name,
+        totalCost: t.total,
+        itemCount: t.item_count,
+        currency:  rows.rows.find((r) => r.document_id === t.document_id)?.unit ?? 'SAR',
       })),
       breakdown: Array.from(byDoc.values()).map(({ fileName, items }) => ({
         document: fileName,
@@ -96,6 +96,6 @@ export async function compareCosts(args: {
         })),
       })),
     },
-    sources,
+    sources: buildSources(rows.rows),
   };
 }

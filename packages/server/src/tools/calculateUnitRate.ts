@@ -1,5 +1,6 @@
 import { pool } from '../db/client.js';
 import { SourceReference, ToolResult } from '../types/index.js';
+import { likeParam } from './utils.js';
 
 interface UnitRateRow {
   item:       string;
@@ -17,9 +18,7 @@ export async function calculateUnitRate(args: {
   documentId?: string;
 }): Promise<ToolResult> {
   const { item, documentId } = args;
-  const likeFilter = item ? `%${item}%` : null;
 
-  // This query looks for rows in the extracted_values table where there is a cost and a quantity on the same row (matching sheet_name and row_number) for the same document. It then calculates the unit rate by dividing cost by quantity. The results are filtered by documentId and item label if provided, and sorted by cost descending.
   const result = await pool.query<UnitRateRow>(
     `SELECT
        c.label                                     AS item,
@@ -45,7 +44,7 @@ export async function calculateUnitRate(args: {
        AND ($2::text IS NULL OR c.label ILIKE $2)
      ORDER BY c.numeric_value DESC
      LIMIT 100`,
-    [documentId ?? null, likeFilter],
+    [documentId ?? null, likeParam(item)],
   );
 
   if (result.rows.length === 0) {

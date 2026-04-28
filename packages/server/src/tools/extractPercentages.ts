@@ -1,5 +1,6 @@
 import { pool } from '../db/client.js';
-import { SourceReference, ToolResult } from '../types/index.js';
+import { ToolResult } from '../types/index.js';
+import { buildSources } from './utils.js';
 
 interface PctRow {
   label:         string;
@@ -7,6 +8,7 @@ interface PctRow {
   numeric_value: number | null;
   context:       string;
   sheet_name:    string | null;
+  page_number:   number | null;
   row_number:    number | null;
   file_name:     string;
 }
@@ -19,7 +21,7 @@ export async function extractPercentages(args: {
   const result = await pool.query<PctRow>(
     `SELECT
        ev.label, ev.raw_value, ev.numeric_value,
-       ev.context, ev.sheet_name, ev.row_number,
+       ev.context, ev.sheet_name, ev.page_number, ev.row_number,
        d.file_name
      FROM extracted_values ev
      JOIN documents d ON ev.document_id = d.id
@@ -34,12 +36,6 @@ export async function extractPercentages(args: {
     return { success: false, data: 'No percentage values found.', sources: [] };
   }
 
-  const sources: SourceReference[] = result.rows.map((r) => ({
-    documentName: r.file_name,
-    location:     r.sheet_name ? `Sheet: ${r.sheet_name}, Row ${r.row_number}` : '',
-    excerpt:      r.context.slice(0, 150),
-  }));
-
   const items = result.rows.map((r) => ({
     label:   r.label,
     value:   r.numeric_value !== null ? `${r.numeric_value}%` : r.raw_value,
@@ -49,7 +45,7 @@ export async function extractPercentages(args: {
 
   return {
     success: true,
-    data: { items, totalItems: items.length },
-    sources,
+    data:    { items, totalItems: items.length },
+    sources: buildSources(result.rows),
   };
 }

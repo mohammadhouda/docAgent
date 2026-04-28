@@ -1,5 +1,6 @@
 import { pool } from '../db/client.js';
-import { SourceReference, ToolResult } from '../types/index.js';
+import { ToolResult } from '../types/index.js';
+import { buildSources, formatLocation } from './utils.js';
 
 interface DateRow {
   label:       string;
@@ -33,23 +34,17 @@ export async function extractDatesDeliverables(args: { documentId?: string }): P
     return { success: false, data: 'No dates or milestones found.', sources: [] };
   }
 
-  const sources: SourceReference[] = result.rows.map((r) => ({
-    documentName: r.file_name,
-    location:     r.sheet_name ? `Sheet: ${r.sheet_name}, Row ${r.row_number}` : `Page ${r.page_number}`,
-    excerpt:      r.context.slice(0, 150),
-  }));
-
   const items = result.rows.map((r) => ({
     label:    r.label,
     date:     r.date_value ?? r.raw_value,
     source:   r.file_name,
-    location: r.sheet_name ? `Sheet: ${r.sheet_name}, Row ${r.row_number}` : `Page ${r.page_number}`,
+    location: formatLocation(r),
     context:  r.context,
   }));
 
   return {
     success: true,
-    data: { items, totalItems: items.length },
-    sources,
+    data:    { items, totalItems: items.length },
+    sources: buildSources(result.rows),
   };
 }

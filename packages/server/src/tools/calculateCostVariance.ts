@@ -1,5 +1,6 @@
 import { pool } from '../db/client.js';
-import { SourceReference, ToolResult } from '../types/index.js';
+import { ToolResult } from '../types/index.js';
+import { likeParam } from './utils.js';
 
 interface DocTotalRow {
   document_id: string;
@@ -15,7 +16,6 @@ export async function calculateCostVariance(args: {
   category?:   string;
 }): Promise<ToolResult> {
   const { documentIdA, documentIdB, category } = args;
-  const likeFilter = category ? `%${category}%` : null;
 
   const result = await pool.query<DocTotalRow>(
     `SELECT
@@ -34,7 +34,7 @@ export async function calculateCostVariance(args: {
             OR ev.label ILIKE $2)
      GROUP BY d.id, d.file_name
      ORDER BY total DESC`,
-    [[documentIdA, documentIdB], likeFilter],
+    [[documentIdA, documentIdB], likeParam(category)],
   );
 
   if (result.rows.length < 2) {
@@ -48,14 +48,14 @@ export async function calculateCostVariance(args: {
   const docA = result.rows.find((r) => r.document_id === documentIdA) ?? result.rows[0];
   const docB = result.rows.find((r) => r.document_id === documentIdB) ?? result.rows[1];
 
-  const absoluteDiff  = docA.total - docB.total;
+  const absoluteDiff   = docA.total - docB.total;
   const percentageDiff = docB.total !== 0
     ? Math.round((absoluteDiff / docB.total) * 10000) / 100
     : null;
 
   const currency = docA.currency ?? docB.currency ?? 'SAR';
 
-  const sources: SourceReference[] = result.rows.map((r) => ({
+  const sources = result.rows.map((r) => ({
     documentName: r.file_name,
     location:     category ? `Category: ${category}` : 'All sections',
     excerpt:      `Total: ${r.total.toLocaleString()} ${currency} across ${r.item_count} items`,
@@ -64,25 +64,15 @@ export async function calculateCostVariance(args: {
   return {
     success: true,
     data: {
-      category:      category ?? null,
+      category:  category ?? null,
       currency,
-      documentA: {
-        id:        docA.document_id,
-        fileName:  docA.file_name,
-        total:     docA.total,
-        itemCount: docA.item_count,
-      },
-      documentB: {
-        id:        docB.document_id,
-        fileName:  docB.file_name,
-        total:     docB.total,
-        itemCount: docB.item_count,
-      },
+      documentA: { id: docA.document_id, fileName: docA.file_name, total: docA.total, itemCount: docA.item_count },
+      documentB: { id: docB.document_id, fileName: docB.file_name, total: docB.total, itemCount: docB.item_count },
       variance: {
-        absoluteDiff,                      // positive = A is more expensive
-        percentageDiff,                    // positive = A costs X% more than B
-        higherCost:  docA.total > docB.total ? docA.file_name : docB.file_name,
-        lowerCost:   docA.total < docB.total ? docA.file_name : docB.file_name,
+        absoluteDiff,
+        percentageDiff,
+        higherCost: docA.total > docB.total ? docA.file_name : docB.file_name,
+        lowerCost:  docA.total < docB.total ? docA.file_name : docB.file_name,
       },
     },
     sources,

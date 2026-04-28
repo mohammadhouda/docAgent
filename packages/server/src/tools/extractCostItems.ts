@@ -1,27 +1,27 @@
 import { pool } from '../db/client.js';
-import { SourceReference, ToolResult } from '../types/index.js';
+import { ToolResult } from '../types/index.js';
+import { buildSources, formatLocation, likeParam } from './utils.js';
 
 interface CostRow {
-  label:       string;
-  raw_value:   string;
+  label:         string;
+  raw_value:     string;
   numeric_value: number | null;
-  unit:        string | null;
-  context:     string;
-  sheet_name:  string | null;
-  page_number: number | null;
-  row_number:  number | null;
-  file_name:   string;
+  unit:          string | null;
+  context:       string;
+  sheet_name:    string | null;
+  page_number:   number | null;
+  row_number:    number | null;
+  file_name:     string;
 }
 
 export async function extractCostItems(args: {
-  minAmount?: number;
-  maxAmount?: number;
-  category?:  string;
-  currency?:  string;
+  minAmount?:  number;
+  maxAmount?:  number;
+  category?:   string;
+  currency?:   string;
   documentId?: string;
 }): Promise<ToolResult> {
   const { minAmount = 0, maxAmount, category, documentId } = args;
-  const likeFilter = category ? `%${category}%` : null;
 
   const result = await pool.query<CostRow>(
     `SELECT
@@ -39,31 +39,25 @@ export async function extractCostItems(args: {
             OR ev.label ILIKE $4)
      ORDER BY ev.numeric_value DESC NULLS LAST
      LIMIT 200`,
-    [documentId ?? null, minAmount, maxAmount ?? null, likeFilter],
+    [documentId ?? null, minAmount, maxAmount ?? null, likeParam(category)],
   );
 
   if (result.rows.length === 0) {
     return { success: false, data: 'No cost items found.', sources: [] };
   }
 
-  const sources: SourceReference[] = result.rows.map((r) => ({
-    documentName: r.file_name,
-    location:     r.sheet_name ? `Sheet: ${r.sheet_name}, Row ${r.row_number}` : `Page ${r.page_number}`,
-    excerpt:      r.context.slice(0, 150),
-  }));
-
   const items = result.rows.map((r) => ({
     label:    r.label,
     amount:   r.numeric_value,
     currency: r.unit ?? 'SAR',
     source:   r.file_name,
-    location: r.sheet_name ? `Sheet: ${r.sheet_name}, Row ${r.row_number}` : `Page ${r.page_number}`,
+    location: formatLocation(r),
     context:  r.context,
   }));
 
   return {
     success: true,
-    data: { items, totalItems: items.length },
-    sources,
+    data:    { items, totalItems: items.length },
+    sources: buildSources(result.rows),
   };
 }

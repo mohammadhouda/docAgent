@@ -14,6 +14,8 @@ import { getDocumentSections }        from './getDocumentSections.js';
 import { calculatePercentageOfTotal } from './calculatePercentageOfTotal.js';
 import { calculateCostVariance }      from './calculateCostVariance.js';
 import { calculateUnitRate }          from './calculateUnitRate.js';
+import { computeDifference }          from './computeDifference.js';
+import { applyPercentage }            from './applyPercentage.js';
 
 export const toolDefinitions: OpenAI.Chat.ChatCompletionTool[] = [
   {
@@ -194,6 +196,50 @@ export const toolDefinitions: OpenAI.Chat.ChatCompletionTool[] = [
   {
     type: 'function',
     function: {
+      name: 'apply_percentage',
+      description:
+        'Apply a percentage rate to a known base amount — use for VAT-inclusive totals, retention deductions, ' +
+        'markup additions, or any "base × rate" calculation. ' +
+        'Use operation "add" to get the inclusive total (e.g. contract value + VAT), ' +
+        '"subtract" to remove a rate (e.g. total minus retention). ' +
+        'NEVER compute this yourself — always call this tool when you have a base amount and a rate from tool output.',
+      parameters: {
+        type: 'object',
+        properties: {
+          baseAmount:  { type: 'number', description: 'The base monetary amount' },
+          rate:        { type: 'number', description: 'The percentage rate to apply (e.g. 15 for 15% VAT)' },
+          operation:   { type: 'string', enum: ['add', 'subtract'], description: '"add" to include the rate (VAT, markup), "subtract" to remove it (retention, discount). Default: add' },
+          labelBase:   { type: 'string', description: 'Human-readable label for the base amount (e.g. "Contract value ex-VAT")' },
+          labelRate:   { type: 'string', description: 'Human-readable label for the rate (e.g. "VAT", "Retention", "Markup")' },
+        },
+        required: ['baseAmount', 'rate'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'compute_difference',
+      description:
+        'Compute the exact arithmetic difference between two known numeric values. ' +
+        'Use this whenever you have two numbers from tool output and need the difference, ' +
+        'percentage gap, or to identify which is higher — for example after finding two contract ' +
+        'values with extract_cost_items. NEVER subtract numbers yourself; always call this tool.',
+      parameters: {
+        type: 'object',
+        properties: {
+          valueA: { type: 'number', description: 'First value' },
+          labelA: { type: 'string', description: 'Label for first value (e.g. document or project name)' },
+          valueB: { type: 'number', description: 'Second value' },
+          labelB: { type: 'string', description: 'Label for second value' },
+        },
+        required: ['valueA', 'valueB'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'calculate_percentage_of_total',
       description:
         'Calculate what percentage of the total project cost a specific trade or category represents. ' +
@@ -289,6 +335,10 @@ export async function executeTool(
       return await extractParties(args as { documentId?: string; role?: string });
     case 'extract_percentages':
       return await extractPercentages(args as { documentId?: string });
+    case 'apply_percentage':
+      return await applyPercentage(args as { baseAmount: number; rate: number; operation?: 'add' | 'subtract'; labelBase?: string; labelRate?: string });
+    case 'compute_difference':
+      return await computeDifference(args as { valueA: number; labelA?: string; valueB: number; labelB?: string });
     case 'calculate_percentage_of_total':
       return await calculatePercentageOfTotal(args as { category: string; documentId?: string });
     case 'calculate_cost_variance':

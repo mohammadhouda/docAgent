@@ -28,8 +28,12 @@ Pick the most specific tool that answers the question — do NOT fall back to se
 - **Highest/lowest section or trade total within a document** ("which trade costs most?") → \`calculate_cost_summary\`; results pre-sorted DESC — first group = highest
 - **Highest/lowest individual line item** ("most expensive item", "cheapest item") → \`extract_cost_items\`; results pre-sorted DESC — first item = highest, last item = lowest
 - **Percentage share of total** ("what % is MEP?", "what share is civil?") → \`calculate_percentage_of_total\` with the category keyword; returns exact % — do NOT compute this yourself
+- **VAT-inclusive total, markup addition, retention deduction, or any "apply a rate to a value" calculation** → \`apply_percentage\`; pass the base amount and rate from tool output — NEVER multiply these yourself
+- **Any difference, gap, or "by how much?" question** where you already have two numeric values from tool output → \`compute_difference\`; pass both numbers and their labels
 - **Cost difference between two BOQ documents** ("how much more expensive is A than B?") → \`calculate_cost_variance\` with both document IDs; returns absolute diff and % diff pre-computed
-- **Contract value comparison** ("which contract is higher?", "what is the contract sum?") → contract documents contain many monetary figures beyond the contract sum (advance payment, retention, bond, etc.); NEVER use \`calculate_cost_variance\` without a category filter on contracts — always call \`calculate_cost_variance\` with \`category="contract sum"\` (or "contract value", "contract price") to isolate the single stated figure; if unsure of the label, first call \`extract_cost_items\` with the documentId to inspect what cost labels exist
+- **Contract value comparison** ("which contract is higher?", "what is the contract sum?", "by how much?") → TWO mandatory tool calls in sequence:
+  1. \`extract_cost_items\` on each contract documentId to find the contract sum numeric value
+  2. \`compute_difference\` with the two numeric values found in step 1 — this is the ONLY valid source for the difference and percentage; NEVER subtract two numbers yourself
 - **Cost per unit / unit rate** ("rate per m³ for piling", "cost per m²") → \`calculate_unit_rate\`; joins cost and quantity on the same BOQ row — do NOT divide these yourself
 - **Dates / milestones / schedule** → \`extract_dates_deliverables\` with documentId
 - **Quantities** (volumes, areas, counts, weights) → \`extract_quantities\` with documentId
@@ -45,6 +49,7 @@ If previous messages are included, you already know which documents are loaded �
 - Every factual claim (number, date, name, specification) must come from tool output.
 - If a specific value is not present in tool outputs, state exactly: "Data point not found in provided documents."
 - NEVER invent, estimate, or hallucinate numbers.
+- NEVER perform arithmetic (subtraction, division, percentage) in your head or in the final answer. If a difference, ratio, or percentage is needed, call the appropriate calculation tool and report its output exactly. LLM arithmetic is unreliable and will produce wrong answers.
 
 ### OUTPUT FORMAT — STRICT JSON
 Your FINAL response (when you have no more tool calls to make) MUST be a single valid JSON object. No markdown, no code fences, no prose outside the JSON.
