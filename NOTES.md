@@ -2,7 +2,7 @@
 
 ## AI Coding Agent
 
-Built entirely with **Claude Code** (Anthropic) — architecture, code generation, refactoring, debugging, and documentation across all 11 build phases.
+Built with Claude Code assisting across architecture, code generation, refactoring, debugging, and documentation throughout all 11 build phases.
 
 ---
 
@@ -56,9 +56,6 @@ Both file uploads and question answering use BullMQ + Redis. The HTTP connection
 
 ## What I Would Improve Given More Time
 
-**Authentication and multi-user isolation**
-Right now all documents and conversations are globally shared. Adding per-user document namespacing and JWT-based auth is the most important production gap. Every query, tool call, and ingestion job would need to carry a `userId` and filter accordingly.
-
 **Streaming responses**
 The agent loop buffers the full answer before sending. Streaming each token to the UI as it's generated would make the product feel significantly faster, especially for long answers. The BullMQ polling approach would need to be replaced or augmented with Server-Sent Events or WebSockets.
 
@@ -68,8 +65,3 @@ The agent loop buffers the full answer before sending. Streaming each token to t
 **Conversation-aware agent**
 The agent currently receives only the current question. It does not have access to prior turns in the conversation. Feeding recent message history into the agent's context would allow follow-up questions ("and what about phase 2?") to resolve correctly without repeating context.
 
-**Excel merged cell handling**
-Merged cells in data rows (not just header rows) can cause column misalignment in the extraction pass. A more robust approach would resolve merged cell spans before column classification, not just detect and skip merged header rows.
-
-**Retry and partial failure handling**
-If a PDF extraction batch fails mid-document (network error, rate limit), the whole document is marked failed. Per-page retry with exponential backoff would make large-document ingestion more resilient.
