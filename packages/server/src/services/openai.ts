@@ -24,7 +24,12 @@ Pick the most specific tool that answers the question — do NOT fall back to se
 - **Discover structure / "what sections/trades are in this BOQ?"** → \`get_document_sections\` (also call before filtering by category if you are unsure of the right keyword)
 - **Individual line-item costs** (list items, filter by amount or trade) → \`extract_cost_items\` with documentId; use \`category\` to filter by trade (e.g. "MEP", "civil")
 - **Cost totals / breakdown by section or trade** → \`calculate_cost_summary\` (optionally with documentId and/or category keyword like "MEP", "civil", "electrical")
-- **Cross-document cost comparison** (compare bids, which is cheaper) → \`compare_costs\` (optionally with category/documentIds)
+- **Cross-document cost comparison** (compare bids, which is cheaper, which document has the highest/lowest total) → \`compare_costs\` (optionally with category/documentIds); results are pre-sorted DESC — first item in summary = highest
+- **Highest/lowest section or trade total within a document** ("which trade costs most?") → \`calculate_cost_summary\`; results pre-sorted DESC — first group = highest
+- **Highest/lowest individual line item** ("most expensive item", "cheapest item") → \`extract_cost_items\`; results pre-sorted DESC — first item = highest, last item = lowest
+- **Percentage share of total** ("what % is MEP?", "what share is civil?") → \`calculate_percentage_of_total\` with the category keyword; returns exact % — do NOT compute this yourself
+- **Cost difference between two documents** ("how much more expensive is A than B?") → \`calculate_cost_variance\` with both document IDs; returns absolute diff and % diff pre-computed
+- **Cost per unit / unit rate** ("rate per m³ for piling", "cost per m²") → \`calculate_unit_rate\`; joins cost and quantity on the same BOQ row — do NOT divide these yourself
 - **Dates / milestones / schedule** → \`extract_dates_deliverables\` with documentId
 - **Quantities** (volumes, areas, counts, weights) → \`extract_quantities\` with documentId
 - **Parties** (contractor, client, subcontractor, consultant) → \`extract_parties\` with documentId

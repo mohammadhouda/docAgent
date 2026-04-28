@@ -10,7 +10,10 @@ import { calculateCostSummary } from './calculateCostSummary.js';
 import { extractQuantities }    from './extractQuantities.js';
 import { extractParties }       from './extractParties.js';
 import { extractPercentages }   from './extractPercentages.js';
-import { getDocumentSections }  from './getDocumentSections.js';
+import { getDocumentSections }        from './getDocumentSections.js';
+import { calculatePercentageOfTotal } from './calculatePercentageOfTotal.js';
+import { calculateCostVariance }      from './calculateCostVariance.js';
+import { calculateUnitRate }          from './calculateUnitRate.js';
 
 export const toolDefinitions: OpenAI.Chat.ChatCompletionTool[] = [
   {
@@ -191,6 +194,61 @@ export const toolDefinitions: OpenAI.Chat.ChatCompletionTool[] = [
   {
     type: 'function',
     function: {
+      name: 'calculate_percentage_of_total',
+      description:
+        'Calculate what percentage of the total project cost a specific trade or category represents. ' +
+        'Use for questions like "what share of the BOQ is MEP?", "what percentage is civil works?", ' +
+        '"what fraction of the budget is structural?". Returns category total, grand total, and exact percentage.',
+      parameters: {
+        type: 'object',
+        properties: {
+          category:   { type: 'string', description: 'Trade or section keyword (e.g. "MEP", "civil", "electrical"). Matches sheet name or item label.' },
+          documentId: { type: 'string', description: 'Document ID from list_documents. Omit to calculate across all documents.' },
+        },
+        required: ['category'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'calculate_cost_variance',
+      description:
+        'Calculate the absolute and percentage difference in cost between two documents. ' +
+        'Use for questions like "how much more expensive is bid A than bid B?", "what is the cost difference?", ' +
+        '"which bid is cheaper and by how much?". Returns both totals, the absolute difference, and % difference.',
+      parameters: {
+        type: 'object',
+        properties: {
+          documentIdA: { type: 'string', description: 'First document ID (from list_documents)' },
+          documentIdB: { type: 'string', description: 'Second document ID (from list_documents)' },
+          category:    { type: 'string', description: 'Optional trade/section keyword to limit the comparison (e.g. "MEP", "civil")' },
+        },
+        required: ['documentIdA', 'documentIdB'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'calculate_unit_rate',
+      description:
+        'Calculate the cost per unit for BOQ line items by dividing the cost value by the quantity on the same row. ' +
+        'Use for questions like "what is the rate per m³ for piling?", "cost per m² for the slab", ' +
+        '"what is the unit rate for reinforcement?". Requires the BOQ to have both cost and quantity columns.',
+      parameters: {
+        type: 'object',
+        properties: {
+          item:       { type: 'string', description: 'Item description keyword to search for (e.g. "piling", "concrete", "reinforcement")' },
+          documentId: { type: 'string', description: 'Document ID from list_documents' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'summarize_document',
       description:
         'Get a structured excerpt from a specific document (beginning, middle, end) ' +
@@ -231,6 +289,12 @@ export async function executeTool(
       return await extractParties(args as { documentId?: string; role?: string });
     case 'extract_percentages':
       return await extractPercentages(args as { documentId?: string });
+    case 'calculate_percentage_of_total':
+      return await calculatePercentageOfTotal(args as { category: string; documentId?: string });
+    case 'calculate_cost_variance':
+      return await calculateCostVariance(args as { documentIdA: string; documentIdB: string; category?: string });
+    case 'calculate_unit_rate':
+      return await calculateUnitRate(args as { item?: string; documentId?: string });
     case 'summarize_document':
       return await summarizeDocument(args as { documentId: string });
     default:
