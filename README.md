@@ -1,6 +1,6 @@
 # DocAgent
 
-AI-powered document Q&A for construction and engineering projects. Upload BOQs, contracts, specs, and schedules — then ask natural language questions. Answers come back as structured, cited cards rather than raw text.
+AI-powered document Q&A for construction and engineering projects. Upload BOQs, contracts, specs, and schedules then ask natural language questions. Answers come back as structured, cited cards rather than raw text.
 
 ---
 
