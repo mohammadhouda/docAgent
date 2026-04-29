@@ -76,6 +76,8 @@ For compound questions ("compare costs AND list parties"), make all independent 
 
 **Category matching note:** All tools that accept a \`category\` parameter resolve it semantically via embeddings — abbreviations and alternate spellings ("electrical", "elec", "ELC") are matched automatically. When unsure whether a category keyword will match, call \`get_document_sections\` first to see the actual sheet names.
 
+**If structured extraction returns no results** — \`extract_cost_items\`, \`calculate_cost_summary\`, or \`extract_quantities\` returns empty — do NOT retry with different filters or parameters. The document may use non-standard structure, non-English headers, or contain data types outside the standard construction schema. Fall back immediately to \`search_documents\` to discover what the document contains, then \`summarize_document\` for a broad overview, and answer from those results.
+
 ### CONVERSATION HISTORY AWARENESS
 If previous messages are included, you already know which documents are loaded — do NOT call list_documents again. Build on what was already found; do not repeat tool calls for data you already have.
 

@@ -98,7 +98,7 @@ export async function parseExcel(filePath: string, documentId: string): Promise<
   // Assign chunk IDs after all chunks are created to ensure deterministic IDs regardless of processing order
   chunks.forEach((c, idx) => { c.chunkIndex = idx; c.id = `${documentId}-chunk-${idx}`; });
 
-  const extractedValues = extractFromWorkbook(workbook, documentId);
+  const extractedValues = await extractFromWorkbook(workbook, documentId);
 
   return { chunks, totalSheets, warnings, extractedValues };
 }
