@@ -6,41 +6,49 @@ import { ExtractedValue } from '../extractors/types.js';
 
 // This service manages the storage and retrieval of documents and their associated chunks and extracted values. It provides methods to add new documents, clear the store, retrieve all documents or a specific document by ID, find a document by a selector (ID or filename), check for the existence of embeddings, count the total number of documents, and perform similarity and keyword searches. The service abstracts the database operations related to documents, allowing other parts of the application to interact with it without needing to know the underlying database details.
 interface SearchRow {
-  id:               string;
-  file_name:        string;
-  file_path:        string;
-  file_type:        string;
-  total_pages:      number | null;
-  total_sheets:     number | null;
-  ingested_at:      Date;
-  meta_type:        string | null;
+  id:                string;
+  file_name:         string;
+  file_path:         string;
+  file_type:         string;
+  total_pages:       number | null;
+  total_sheets:      number | null;
+  ingested_at:       Date;
+  meta_type:         string | null;
   meta_project_name: string | null;
-  meta_currency:    string | null;
-  meta_parties:     string[] | null;
-  meta_summary:     string | null;
-  chunk_id:         string;
-  content:          string;
-  chunk_index:      number;
-  page_number:      number | null;
-  sheet_name:       string | null;
-  row_start:        number | null;
-  row_end:          number | null;
-  next_content:     string | null;
+  meta_currency:     string | null;
+  meta_parties:      string[] | null;
+  meta_summary:      string | null;
+  chunk_id:          string;
+  content:           string;
+  chunk_index:       number;
+  page_number:       number | null;
+  sheet_name:        string | null;
+  row_start:         number | null;
+  row_end:           number | null;
+  chunk_type:        string | null;
+  section_title:     string | null;
+  next_content:      string | null;
 }
 
 // This function maps a ChunkRow to the DocumentChunk domain model.
+const VALID_CHUNK_TYPES = new Set(['text', 'table', 'heading']);
+
 function toChunk(row: ChunkRow): DocumentChunk {
   return {
-    id:         row.id,
-    documentId: row.documentId,
-    content:    row.content,
-    chunkIndex: row.chunkIndex,
-    pageNumber: row.pageNumber ?? undefined,
-    sheetName:  row.sheetName  ?? undefined,
-    rowRange:   row.rowStart != null && row.rowEnd != null
+    id:           row.id,
+    documentId:   row.documentId,
+    content:      row.content,
+    chunkIndex:   row.chunkIndex,
+    pageNumber:   row.pageNumber   ?? undefined,
+    sheetName:    row.sheetName    ?? undefined,
+    rowRange:     row.rowStart != null && row.rowEnd != null
       ? { start: row.rowStart, end: row.rowEnd }
       : undefined,
-    embedding:  row.embedding ?? undefined,
+    chunkType:    VALID_CHUNK_TYPES.has(row.chunkType ?? '')
+      ? row.chunkType as DocumentChunk['chunkType']
+      : undefined,
+    sectionTitle: row.sectionTitle ?? undefined,
+    embedding:    row.embedding    ?? undefined,
   };
 }
 
@@ -69,15 +77,17 @@ function toDocument(docRow: DocumentRow, chunkRows: ChunkRow[]): Document {
 // This function builds the search result object by combining the matched chunk with its parent document. It also includes the next chunk's content (if available) to provide additional context for the agent when processing the search results. The resulting object contains both the specific chunk that matched the search criteria and the overall document information, allowing for a richer response to user queries.
 function buildSearchResult(r: SearchRow): { chunk: DocumentChunk; document: Document } {
   const chunkRow: ChunkRow = {
-    id:         r.chunk_id,
-    documentId: r.id,
-    content:    r.content,
-    chunkIndex: r.chunk_index,
-    pageNumber: r.page_number,
-    sheetName:  r.sheet_name,
-    rowStart:   r.row_start,
-    rowEnd:     r.row_end,
-    embedding:  null, // not needed after search
+    id:           r.chunk_id,
+    documentId:   r.id,
+    content:      r.content,
+    chunkIndex:   r.chunk_index,
+    pageNumber:   r.page_number,
+    sheetName:    r.sheet_name,
+    rowStart:     r.row_start,
+    rowEnd:       r.row_end,
+    chunkType:    r.chunk_type,
+    sectionTitle: r.section_title,
+    embedding:    null, // not needed after search
   };
   const chunk = toChunk(chunkRow);
 
@@ -134,15 +144,17 @@ class DocumentStore {
     for (let i = 0; i < doc.chunks.length; i += BATCH) {
       await db.insert(chunks).values(
         doc.chunks.slice(i, i + BATCH).map((c) => ({
-          id:         c.id,
-          documentId: c.documentId,
-          content:    c.content,
-          chunkIndex: c.chunkIndex,
-          pageNumber: c.pageNumber ?? null,
-          sheetName:  c.sheetName  ?? null,
-          rowStart:   c.rowRange?.start ?? null,
-          rowEnd:     c.rowRange?.end   ?? null,
-          embedding:  c.embedding ?? null,
+          id:           c.id,
+          documentId:   c.documentId,
+          content:      c.content,
+          chunkIndex:   c.chunkIndex,
+          pageNumber:   c.pageNumber    ?? null,
+          sheetName:    c.sheetName     ?? null,
+          rowStart:     c.rowRange?.start ?? null,
+          rowEnd:       c.rowRange?.end   ?? null,
+          chunkType:    c.chunkType     ?? null,
+          sectionTitle: c.sectionTitle  ?? null,
+          embedding:    c.embedding     ?? null,
         })),
       );
     }
@@ -245,14 +257,16 @@ class DocumentStore {
         d.id, d.file_name, d.file_path, d.file_type, d.total_pages, d.total_sheets,
         d.ingested_at, d.meta_type, d.meta_project_name, d.meta_currency,
         d.meta_parties, d.meta_summary,
-        c.id          AS chunk_id,
+        c.id            AS chunk_id,
         c.content,
         c.chunk_index,
         c.page_number,
         c.sheet_name,
         c.row_start,
         c.row_end,
-        nc.content    AS next_content
+        c.chunk_type,
+        c.section_title,
+        nc.content      AS next_content
        FROM chunks c
        JOIN documents d ON c.document_id = d.id
        LEFT JOIN chunks nc
@@ -276,14 +290,16 @@ class DocumentStore {
         d.id, d.file_name, d.file_path, d.file_type, d.total_pages, d.total_sheets,
         d.ingested_at, d.meta_type, d.meta_project_name, d.meta_currency,
         d.meta_parties, d.meta_summary,
-        c.id          AS chunk_id,
+        c.id            AS chunk_id,
         c.content,
         c.chunk_index,
         c.page_number,
         c.sheet_name,
         c.row_start,
         c.row_end,
-        nc.content    AS next_content
+        c.chunk_type,
+        c.section_title,
+        nc.content      AS next_content
        FROM chunks c
        JOIN documents d ON c.document_id = d.id
        LEFT JOIN chunks nc

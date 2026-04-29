@@ -87,6 +87,10 @@ export async function runMigrations(): Promise<void> {
       ON extracted_values (document_id, type)
     `);
 
+    // Add chunk classification columns (safe to run on existing DBs)
+    await client.query(`ALTER TABLE chunks ADD COLUMN IF NOT EXISTS chunk_type    TEXT`);
+    await client.query(`ALTER TABLE chunks ADD COLUMN IF NOT EXISTS section_title TEXT`);
+
     console.log('[DB] Migrations complete');
   } finally {
     client.release();

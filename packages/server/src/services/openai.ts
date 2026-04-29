@@ -30,6 +30,9 @@ For compound questions ("compare costs AND list parties"), make all independent 
 **"What is the total cost?" / "Break down the cost by trade" / "Which section costs most?" / "What is the MEP budget?"**
 → \`calculate_cost_summary\` with optional documentId and category; results pre-sorted DESC — first group = highest
 
+**When the response includes \`summarySheetSubtotals\`:**
+These are pre-aggregated cross-sheet subtotals from a summary/rollup sheet — each entry represents a different scope (e.g. "BOQ", "Civil", "Phase 1"). The top-level \`grandTotal\` reflects only regular line-item sheets. To answer the query, match the user's stated scope to the correct label in \`summarySheetSubtotals\` and report that value. Do NOT sum all subtotals together and do NOT report \`grandTotal\` when only \`summarySheetSubtotals\` are present.
+
 **"List the most expensive items" / "Show items above X SAR" / "List all electrical / ELC line items"**
 → \`extract_cost_items\` — always pass documentId; results pre-sorted DESC — first item = most expensive, last = cheapest
 

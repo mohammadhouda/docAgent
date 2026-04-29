@@ -14,7 +14,7 @@ Return a JSON object with a single key "items" containing an array.
 
 Each item must follow this exact shape:
 {
-  "type": "cost" | "date" | "percentage" | "duration" | "quantity" | "party" | "reference",
+  "type": "snake_case string — use a standard type where it fits, or invent a descriptive one",
   "label": "descriptive name of what this value represents",
   "rawValue": "exact text as it appears in the document",
   "numericValue": <number or null>,
@@ -23,7 +23,7 @@ Each item must follow this exact shape:
   "context": "the full sentence or clause this value appears in (max 200 chars)"
 }
 
-TYPE GUIDE:
+STANDARD TYPES — use these when they fit:
 - cost: any monetary amount — numericValue is the full number (e.g. 1500000, not "1.5M")
 - date: any calendar date, deadline, or milestone — dateValue in YYYY-MM-DD is required
 - percentage: VAT, retention, margin, completion rate — numericValue is the whole number (15, not 0.15)
@@ -32,6 +32,9 @@ TYPE GUIDE:
 - party: company name, contractor, client, consultant — no numericValue
 - reference: contract number, drawing number, clause reference — no numericValue
 
+OPEN-ENDED TYPES — invent a descriptive snake_case type for anything else:
+  risk_level, status, completion_rate, technical_score, weighted_score, penalty_rate, …
+
 RULES:
 - Only extract values that are clearly present in the text — no inference or guessing
 - Abbreviations like "1.5M SAR" must be expanded to 1500000
@@ -39,9 +42,8 @@ RULES:
 - Return {"items": []} if nothing is found
 - Output ONLY the JSON object, no prose`;
 
-const VALID_TYPES = new Set<string>([
-  'cost', 'date', 'percentage', 'duration', 'quantity', 'party', 'reference',
-]);
+// Accept any snake_case type string — standard or LLM-invented (risk_level, status, …).
+const VALID_TYPE_RE = /^[a-z][a-z0-9_]*$/;
 
 interface RawItem {
   type?: string;
@@ -63,7 +65,7 @@ function parseResponse(raw: string, documentId: string, pageNumber: number): Ext
       : Array.isArray(parsed.items) ? parsed.items : [];
 
     return items.flatMap((item): ExtractedValue[] => {
-      if (!item.type || !VALID_TYPES.has(item.type)) return [];
+      if (!item.type || !VALID_TYPE_RE.test(item.type)) return [];
       if (!item.label?.trim() || !item.rawValue?.trim()) return [];
 
       let dateValue: Date | undefined;

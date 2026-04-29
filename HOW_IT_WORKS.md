@@ -6,7 +6,7 @@ Two flows drive the system: **Ingestion** (loading a document) and **Query** (as
 
 ## Flow 1 — Document Ingestion
 
-When a file is uploaded through the UI, it is added to a **BullMQ job queue** (Redis-backed). The server returns job IDs immediately; a background worker processes one file at a time to stay within OpenAI rate limits. Every file goes through the same six-step pipeline regardless of whether it arrived via drag-and-drop or the folder-ingest API.
+When a file is uploaded through the UI or API, it is added to a **BullMQ job queue** (Redis-backed). The server returns job IDs immediately; a background worker processes one file at a time to stay within OpenAI rate limits. Every file goes through the same six-step pipeline regardless of whether it arrived via drag-and-drop or the folder-ingest API.
 
 ```
 Upload (UI) or folder path (API)
@@ -15,10 +15,10 @@ Upload (UI) or folder path (API)
     1. Parse        extract text — page by page (PDF) or row batch (Excel)
             │
             ▼
-    2. Chunk        split into ~6 000-char segments with 200-char overlap
+    2. Chunk        split into ~6,000-char segments with 200-char overlap
             │
             ▼
-    3. Embed        text-embedding-3-small → 1 536-dim vectors → pgvector
+    3. Embed        text-embedding-3-small → 1,536-dim vectors → pgvector
             │
             ▼
     4. Classify     gpt-4o-mini reads opening content → type, project, parties
@@ -30,13 +30,41 @@ Upload (UI) or folder path (API)
     6. Store        document + chunks + extracted_values → PostgreSQL
 ```
 
+### Processing Characteristics
+
+| Characteristic | Value |
+|---|---|
+| Worker concurrency | 1 (to respect OpenAI rate limits) |
+| Max PDF pages | 50 (configurable in `parsers/pdfParser.ts`) |
+| Excel batch size | 50 rows per chunk |
+| Embedding batch size | 100 texts per API call |
+| Chunk overlap | 200 characters |
+| Target chunk size | ~6,000 characters |
+
 ---
 
 ### Step 1 — Parse
 
-**PDF** (`parsers/pdfParser.ts`): uses `pdf-parse` with a `pagerender` callback to get per-page text. Returns `string[]`, one entry per page, up to 50 pages (configurable). Pages beyond the limit are skipped with a warning.
+**PDF** (`parsers/pdfParser.ts`)
 
-**Excel / CSV** (`parsers/excelParser.ts`): `exceljs` iterates every worksheet. The first row is treated as column headers. Data rows are serialised as `Row 5: Description: Foundation Works | Unit: m³ | Rate: 850.00` and collected in batches of 50 before chunking.
+Uses `pdf-parse` with a `pagerender` callback to extract per-page text. Returns `string[]`, one entry per page.
+
+```typescript
+// Returns: { text: string, pageNumber: number }[]
+const pages = await parsePdf(buffer);
+```
+
+- Pages beyond the limit (default: 50) are skipped with a warning
+- Each page's text is preserved with original line breaks
+
+**Excel / CSV** (`parsers/excelParser.ts`)
+
+Uses `exceljs` to iterate every worksheet:
+
+1. First row treated as column headers
+2. Data rows serialized as: `Row 5: Description: Foundation Works | Unit: m³ | Rate: 850.00`
+3. Collected in batches of 50 rows before chunking
+4. Sheet names preserved for downstream filtering
 
 ---
 
@@ -44,9 +72,22 @@ Upload (UI) or folder path (API)
 
 (`utils/chunker.ts`)
 
-Each page or row-batch is split into segments of ~6 000 characters. When a cut is needed the chunker prefers a paragraph boundary (`\n\n`), then a sentence boundary (`. `), then a hard character cut — so segments always break at natural points.
+Each page or row-batch is split into segments of ~6,000 characters. The chunker uses a **boundary preference hierarchy**:
 
-Each chunk stores `pageNumber` (PDF) or `sheetName` + `rowRange` (Excel), plus a global `chunkIndex`. The 200-character overlap means any sentence that straddles a boundary appears in both adjacent chunks — nothing is silently dropped.
+1. **Paragraph boundary** (`\n\n`) — preferred
+2. **Sentence boundary** (`. `) — fallback
+3. **Hard character cut** — last resort
+
+This ensures segments always break at natural linguistic points — mid-sentence cuts are rare.
+
+**Metadata preserved:**
+
+| Source | Metadata fields |
+|---|---|
+| PDF | `pageNumber`, `chunkIndex` |
+| Excel | `sheetName`, `rowRange`, `chunkIndex` |
+
+The 200-character overlap means any sentence that straddles a boundary appears in both adjacent chunks — nothing is silently dropped.
 
 ---
 
@@ -54,7 +95,17 @@ Each chunk stores `pageNumber` (PDF) or `sheetName` + `rowRange` (Excel), plus a
 
 (`services/embeddings.ts`)
 
-All chunk texts are sent to `text-embedding-3-small` in batches of 100. Each text returns as a 1 536-dimensional float vector, stored in `chunks.embedding` (`vector(1536)`). An HNSW index on that column enables fast cosine-similarity queries at search time.
+All chunk texts are sent to `text-embedding-3-small` in batches of 100. Each text returns as a **1,536-dimensional float vector**, stored in `chunks.embedding` (`vector(1536)`).
+
+**Index:** An HNSW index on the `embedding` column enables fast cosine-similarity queries at search time:
+
+```sql
+CREATE INDEX chunks_embedding_idx ON chunks
+USING hnsw (embedding vector_cosine_ops)
+WITH (m = 16, ef_construction = 64);
+```
+
+**Similarity threshold:** Semantic search returns chunks with cosine distance < 0.75 by default.
 
 ---
 
@@ -62,13 +113,15 @@ All chunk texts are sent to `text-embedding-3-small` in batches of 100. Each tex
 
 (`services/metadata.ts`)
 
-The first two chunks of the document are sent to `gpt-4o-mini` with a prompt asking for:
+The first two chunks of the document are sent to `gpt-4o-mini` with a structured prompt asking for:
 
-- `type` — `contract` | `boq` | `specification` | `schedule` | `report` | `other`
-- `projectName`
-- `currency` — dominant currency code (e.g. `SAR`)
-- `parties` — up to 4 organisation names
-- `summary` — one sentence
+| Field | Type | Description |
+|---|---|---|
+| `type` | `contract` \| `boq` \| `specification` \| `schedule` \| `report` \| `other` | Document category |
+| `projectName` | `string` | Project name extracted from header/intro |
+| `currency` | `string` | Dominant currency code (e.g., `SAR`, `USD`) |
+| `parties` | `string[]` | Up to 4 organization names mentioned |
+| `summary` | `string` | One-sentence document summary |
 
 This metadata is stored on the `documents` row and returned by `list_documents` so the agent can pick the right file without reading every document.
 
@@ -78,16 +131,50 @@ This metadata is stored on the `documents` row and returned by `list_documents` 
 
 A second pass pulls individual typed values into the `extracted_values` table for direct SQL queries. The path differs by file type.
 
-**Excel** (`extractors/excelExtractor.ts`) — fully deterministic, zero LLM tokens:
+#### Excel — Deterministic Extraction (`extractors/excelExtractor.ts`)
 
-1. **Header detection** — scans the first 10 rows, picks the first with ≥2 distinct non-empty values (skips merged title rows).
-2. **Column classification** — two-pass: first locates the description and item-number columns; second classifies all others by type (`cost`, `date`, `quantity`, `party`, `percentage`, `reference`, `duration`) using regex.
-3. **Cost column priority** — Committed > Total Amount > Amount > Qty × Rate fallback. Sheets with no item-number column (summary/aggregate sheets) are skipped entirely.
-4. **Row walking** — rows matching `TOTAL_ROW_RE` (Grand Total, Subtotal, VAT) are skipped; each line item is stored as `A-001: Foundation Works`.
+**Zero LLM tokens** — fully regex and heuristic based:
 
-**PDF** (`extractors/pdfExtractor.ts`) — LLM-assisted:
+1. **Header detection** — scans first 10 rows, picks first row with ≥2 distinct non-empty values (skips merged title rows)
 
-Each page is sent to `gpt-4o-mini` with a structured extraction prompt. The model returns a JSON array of `{ type, label, rawValue, numericValue, dateValue, unit, context }` objects. Up to 5 pages run concurrently; malformed responses are dropped silently. Results are stored with `pageNumber`.
+2. **Column classification** — two-pass algorithm:
+   - **Pass 1:** Locate description and item-number columns
+   - **Pass 2:** Classify all others by type using regex patterns:
+     - `cost` — currency symbols, comma-separated numbers
+     - `date` — ISO, US, EU date formats
+     - `quantity` — numbers with units (m³, m², kg, etc.)
+     - `party` — organization suffixes (LLC, Co., Ltd, etc.)
+     - `percentage` — numbers with % symbol
+     - `reference` — alphanumeric codes (e.g., `A-001`, `DWG-123`)
+     - `duration` — time periods (days, weeks, months)
+
+3. **Cost column priority** — when multiple cost columns exist:
+   - Committed > Total Amount > Amount > Qty × Rate fallback
+
+4. **Row walking** — rows matching `TOTAL_ROW_RE` (Grand Total, Subtotal, VAT) are skipped; each line item stored as `A-001: Foundation Works`
+
+5. **Sheet filtering** — sheets with no item-number column (summary/aggregate sheets) are skipped entirely
+
+#### PDF — LLM-Assisted Extraction (`extractors/pdfExtractor.ts`)
+
+Each page is sent to `gpt-4o-mini` with a structured extraction prompt. The model returns a JSON array of:
+
+```typescript
+interface ExtractedValue {
+  type: 'cost' | 'date' | 'quantity' | 'party' | 'percentage' | 'reference';
+  label: string;
+  rawValue: string;
+  numericValue?: number;
+  dateValue?: string;
+  unit?: string;
+  context: string;
+  pageNumber: number;
+}
+```
+
+- Up to 5 pages run concurrently
+- Malformed responses are dropped silently
+- Results stored with `pageNumber` for traceability
 
 ---
 
@@ -95,7 +182,49 @@ Each page is sent to `gpt-4o-mini` with a structured extraction prompt. The mode
 
 (`db/schema.ts`, Drizzle ORM)
 
-The document row, chunks (inserted in batches of 100), and extracted values are written to PostgreSQL. `chunks` and `extracted_values` both carry `ON DELETE CASCADE` — deleting a document cleans up everything with a single SQL statement.
+The document row, chunks (inserted in batches of 100), and extracted values are written to PostgreSQL.
+
+**Cascade deletes:** `chunks` and `extracted_values` both carry `ON DELETE CASCADE` — deleting a document cleans up everything with a single SQL statement.
+
+**Schema overview:**
+
+```
+documents
+├── id (uuid)
+├── file_name (text)
+├── file_path (text)
+├── file_size (bigint)
+├── mime_type (text)
+├── type (text)           -- contract, boq, specification, etc.
+├── project_name (text)
+├── currency (text)
+├── parties (text[])
+├── summary (text)
+└── created_at (timestamp)
+
+chunks
+├── id (uuid)
+├── document_id (uuid) → documents.id
+├── content (text)
+├── embedding (vector(1536))
+├── page_number (int)
+├── sheet_name (text)
+├── row_range (text)
+└── chunk_index (int)
+
+extracted_values
+├── id (uuid)
+├── document_id (uuid) → documents.id
+├── type (text)
+├── label (text)
+├── raw_value (text)
+├── numeric_value (double precision)
+├── date_value (timestamp)
+├── unit (text)
+├── context (text)
+├── page_number (int)
+└── sheet_name (text)
+```
 
 ---
 
@@ -116,7 +245,7 @@ POST /api/ask  →  save user message  →  enqueue job  →  202 { jobId }
             │              AGENT LOOP                  │  max 5 iterations
             │                                         │
             │  gpt-4o-mini receives message array      │
-            │  + 11 tool definitions                   │
+            │  + 15 tool definitions                   │
             │                                         │
             │  finish_reason = "stop"  →  write answer │
             │  finish_reason = "tool_calls"            │
@@ -135,6 +264,17 @@ POST /api/ask  →  save user message  →  enqueue job  →  202 { jobId }
               { state: "completed", result: { answer, sources, toolsUsed } }
 ```
 
+### Job States
+
+| State | Description | Poll Response |
+|---|---|---|
+| `waiting` | In queue, not yet picked up | `{ state: "active", status: "Waiting..." }` |
+| `active` | Worker processing | `{ state: "active", status: "Calling <tool>..." }` |
+| `completed` | Answer ready | `{ state: "completed", result: {...} }` |
+| `failed` | Error occurred | `{ state: "failed", error: "..." }` |
+
+### Live Status Updates
+
 While the job is active, the poll endpoint returns `{ state: "active", status: "Calling calculate cost summary…" }`. That `status` string comes from an in-process `requestStatus` map updated by the worker on each tool call — the same Node.js process, no IPC needed. The loading indicator in the UI displays this text live.
 
 ---
@@ -145,31 +285,84 @@ While the job is active, the poll endpoint returns `{ state: "active", status: "
 
 The system prompt defines the agent's role and enforces hard constraints:
 
-- **Role** — Senior Project Controller & Document Analyst
-- **Tool protocol** — call `list_documents` once (first turn only); skip it if document IDs are already in the message history
-- **Tool routing** — explicit rules for which tool to use per question type: `calculate_cost_summary` for trade totals, `get_document_sections` to discover BOQ structure, `extract_cost_items` for line-item detail, `search_documents` only for open-ended prose questions
-- **Truth constraint** — every number, date, or party name must come from tool output; the required response when a value is not found is `"Data point not found in provided documents"`
-- **Output format** — the final response must be a raw JSON object; no markdown, no code fences, no prose outside the JSON
+**Role:** Senior Project Controller & Document Analyst
+
+**Tool protocol:**
+- Call `list_documents` once (first turn only)
+- Skip `list_documents` if document IDs are already in the message history
+
+**Tool routing rules:**
+- `calculate_cost_summary` → trade totals, budget breakdowns
+- `get_document_sections` → discover BOQ structure, sheet lists
+- `extract_cost_items` → line-item detail, filtering by amount/category
+- `search_documents` → open-ended prose questions (clauses, specs, narrative)
+- All other tools → explicit question type matches
+
+**Truth constraint:**
+- Every number, date, or party name **must** come from tool output
+- Required response when a value is not found: `"Data point not found in provided documents"`
+- No estimation, no hallucination
+
+**Output format:**
+- Final response must be a raw JSON object
+- No markdown, no code fences, no prose outside the JSON
 
 ---
 
-### The 11 Tools
+### The 15 Tools
 
-All tools query PostgreSQL directly — no LLM calls at query time.
+All tools query PostgreSQL directly — **no LLM calls at query time**.
 
-| Tool | What it queries |
-|---|---|
-| `list_documents` | `documents` + distinct sheet names from `chunks`; returns file metadata and sheet list |
-| `get_document_sections` | Groups `extracted_values` by `sheet_name`; extracts item-code letter prefixes (A-001 → A); returns sheet names with cost totals and code breakdown |
-| `search_documents` | pgvector cosine similarity when embeddings exist; PostgreSQL FTS fallback; includes adjacent chunk for context continuity |
-| `extract_cost_items` | `WHERE type = 'cost'`; filterable by `documentId`, `minAmount`, `maxAmount`, `category` (ILIKE on sheet name or label) |
-| `calculate_cost_summary` | `GROUP BY sheet_name`; `category` filter matches both `sheet_name` and `ev.label` — handles sheet-per-trade and single-sheet BOQs |
-| `compare_costs` | Per-document totals and item breakdown; filterable by `category` and/or `documentIds` |
-| `extract_dates_deliverables` | `WHERE type = 'date' ORDER BY date_value ASC` |
-| `extract_quantities` | `WHERE type = 'quantity'`; filterable by `unit` (ILIKE) and `minValue` |
-| `extract_parties` | `WHERE type = 'party'`; filterable by `role`; deduplicates by (role, name) |
-| `extract_percentages` | `WHERE type = 'percentage' ORDER BY numeric_value DESC` |
-| `summarize_document` | Samples 6 chunks — 2 from start, 2 from middle, 2 from end |
+| Tool | SQL Strategy | What It Queries |
+|---|---|---|
+| `list_documents` | `SELECT` on `documents` + `SELECT DISTINCT sheet_name` from `chunks` | File metadata and sheet list |
+| `get_document_sections` | `GROUP BY sheet_name` on `extracted_values`; extract item-code letter prefixes (A-001 → A) | Sheet names with cost totals and code breakdown |
+| `search_documents` | pgvector cosine similarity (fallback: PostgreSQL FTS with `to_tsvector`) | Semantic search; includes adjacent chunk for context |
+| `extract_cost_items` | `WHERE type = 'cost'`; filterable by `documentId`, `minAmount`, `maxAmount`, `category` (ILIKE on sheet name or label) | Cost line items with optional filters |
+| `calculate_cost_summary` | `SUM(numeric_value) GROUP BY sheet_name`; `category` filter matches both `sheet_name` and `ev.label` | Trade/subtotal breakdowns |
+| `compare_costs` | Per-document `SUM()` with `JOIN` on `documents`; filterable by `category` and/or `documentIds` | Side-by-side cost comparison |
+| `calculate_cost_variance` | Subtraction of two `calculate_cost_summary` results | Percentage and absolute difference |
+| `calculate_percentage_of_total` | `(part / total) * 100` using two tool results | Share of budget analysis |
+| `calculate_unit_rate` | `SUM(cost) / SUM(quantity)` from two extractions | Rate per unit (m³, m², etc.) |
+| `compute_difference` | Simple arithmetic on two numeric tool results | Absolute difference |
+| `extract_dates_deliverables` | `WHERE type = 'date' ORDER BY date_value ASC` | Chronological milestone list |
+| `extract_quantities` | `WHERE type = 'quantity'`; filterable by `unit` (ILIKE) and `minValue` | Quantity takeoffs |
+| `extract_parties` | `WHERE type = 'party'`; filterable by `role`; `DISTINCT ON (role, name)` | Contractors, subcontractors, consultants |
+| `extract_percentages` | `WHERE type = 'percentage' ORDER BY numeric_value DESC` | Tax rates, retention, penalties |
+| `summarize_document` | Samples 6 chunks — 2 from start, 2 from middle, 2 from end; sends to `gpt-4o-mini` | Document summary |
+
+---
+
+### Tool Call Flow
+
+```
+Agent receives: "What is the total MEP cost?"
+        │
+        ▼
+Iteration 1:
+  gpt-4o-mini decides: call calculate_cost_summary(category="MEP")
+        │
+        ▼
+  Tool executes SQL:
+  SELECT sheet_name, SUM(numeric_value) as total
+  FROM extracted_values
+  WHERE type = 'cost'
+    AND (sheet_name ILIKE '%MEP%' OR label ILIKE '%MEP%')
+  GROUP BY sheet_name
+        │
+        ▼
+  Tool result appended to messages:
+  [{ sheet_name: "Electrical Works", total: 12500000 },
+   { sheet_name: "Mechanical Works", total: 8300000 }]
+        │
+        ▼
+Iteration 2:
+  gpt-4o-mini has data → formats JSON answer
+  finish_reason = "stop"
+        │
+        ▼
+  Answer saved, job completed
+```
 
 ---
 
@@ -186,12 +379,16 @@ Every final response is a JSON object. The backend parses it with `JSON.parse`; 
     {
       "type": "key_facts",
       "title": "Project Details",
-      "items": [{ "label": "Contract Value", "value": "SAR 48,500,000", "citation": "Contract.pdf | Page 1" }]
+      "items": [
+        { "label": "Contract Value", "value": "SAR 48,500,000", "citation": "Contract.pdf | Page 1" }
+      ]
     },
     {
       "type": "timeline",
       "title": "Key Milestones",
-      "items": [{ "date": "1 Apr 2024", "label": "Commencement", "citation": "Contract.pdf | Page 7" }]
+      "items": [
+        { "date": "1 Apr 2024", "label": "Commencement", "citation": "Contract.pdf | Page 7" }
+      ]
     },
     {
       "type": "table",
@@ -202,18 +399,34 @@ Every final response is a JSON object. The backend parses it with `JSON.parse`; 
     {
       "type": "list",
       "title": "Scope Items",
-      "items": [{ "text": "Foundation and substructure works", "citation": "Spec.pdf | Page 3" }]
+      "items": [
+        { "text": "Foundation and substructure works", "citation": "Spec.pdf | Page 3" }
+      ]
     },
     {
       "type": "parties",
       "title": "Contract Parties",
-      "items": [{ "role": "Employer", "name": "Al Nakheel Development Co.", "citation": "Contract.pdf | Page 1" }]
+      "items": [
+        { "role": "Employer", "name": "Al Nakheel Development Co.", "citation": "Contract.pdf | Page 1" }
+      ]
     }
   ]
 }
 ```
 
-The agent chooses section types based on the question. Cost questions produce a `table`. Milestone questions produce a `timeline`. Scope questions produce `paragraph` + `list`. The frontend owns all rendering decisions — the AI never decides how data is visually presented.
+### Section Selection Logic
+
+The agent chooses section types based on the question type:
+
+| Question type | Section types produced |
+|---|---|
+| Cost breakdown | `table` + optional `key_facts` (totals) |
+| Milestones/dates | `timeline` + optional `paragraph` (context) |
+| Scope/narrative | `paragraph` + `list` |
+| Parties | `parties` + optional `key_facts` |
+| General summary | `paragraph` + `key_facts` |
+
+The frontend owns all rendering decisions — the AI never decides how data is visually presented.
 
 ---
 
@@ -225,20 +438,56 @@ Loops over `sections` and dispatches each to a typed renderer:
 
 | Section type | Rendered as |
 |---|---|
-| `paragraph` | Plain `<p>` |
-| `key_facts` | Two-column label/value grid |
-| `timeline` | Vertical line, blue dot per milestone |
+| `paragraph` | Plain `<p>` with Tailwind prose |
+| `key_facts` | Two-column label/value grid (blue labels, bold values) |
+| `timeline` | Vertical line, blue dot per milestone, date badge |
 | `table` | Striped `<table>` from `headers` + `rows` |
 | `list` | Bullet list with blue dots |
-| `parties` | Role badge + company name card |
+| `parties` | Role badge (gray) + company name card |
 
-Items with a `citation` field show an inline `[File | Location]` tag. Below each answer a collapsible **Sources** section lists the raw `SourceReference` objects collected across all tool calls during that response.
+### Citations
+
+Items with a `citation` field show an inline `[File | Location]` tag. Clicking expands a tooltip with full source metadata.
+
+### Sources Collapsible
+
+Below each answer, a collapsible **Sources** section lists the raw `SourceReference` objects collected across all tool calls during that response:
+
+```typescript
+interface SourceReference {
+  documentId: string;
+  documentName: string;
+  pageNumber?: number;
+  sheetName?: string;
+  rowRange?: string;
+  content: string;
+}
+```
 
 ---
 
 ## Conversation Persistence
 
-On first load, `ChatInterface` creates a conversation via `POST /api/conversations` and stores the ID in `localStorage`. On subsequent loads it fetches the full message history and restores the UI. User messages are saved before the ask job is enqueued; assistant messages are saved inside the worker once the agent finishes. The `answer` and `sources` columns are JSONB, so the full structured response survives page reload.
+On first load, `ChatInterface` creates a conversation via `POST /api/conversations` and stores the ID in `localStorage`. On subsequent loads it fetches the full message history and restores the UI.
+
+### Message Schema
+
+```typescript
+interface Message {
+  id: string;
+  conversationId: string;
+  role: 'user' | 'assistant';
+  content: string;           // User question text
+  answer?: object;           // Parsed JSON for assistant
+  sources?: SourceReference[];
+  toolsUsed?: string[];
+  createdAt: Date;
+}
+```
+
+- User messages are saved **before** the ask job is enqueued
+- Assistant messages are saved inside the worker once the agent finishes
+- The `answer` and `sources` columns are JSONB, so the full structured response survives page reload
 
 ---
 
@@ -251,7 +500,7 @@ Browser                     Server                          OpenAI
   │◀── { jobs: [...] } ─────────│  (queued, returns instantly)  │
   │   poll /upload/jobs/:id     │                               │
   │                            │── embed chunks (batch 100) ──▶│
-  │                            │◀── 1 536-dim vectors ──────────│
+  │                            │◀── 1,536-dim vectors ──────────│
   │                            │── classify document ──────────▶│
   │                            │◀── metadata JSON ──────────────│
   │                            │── PDF: extract per page ──────▶│
@@ -273,3 +522,45 @@ Browser                     Server                          OpenAI
   │     result: { answer, … }} │                               │
   │   render StructuredAnswer   │                               │
 ```
+
+---
+
+## Performance Characteristics
+
+| Operation | Typical Latency | Notes |
+|---|---|---|
+| Upload job enqueue | <10 ms | Returns before processing |
+| PDF parse (10 pages) | ~500 ms | Linear in page count |
+| Excel parse (500 rows) | ~200 ms | Linear in row count |
+| Embedding (100 chunks) | ~2 s | Batch API call |
+| Classification | ~1 s | Single LLM call |
+| PDF extraction (10 pages) | ~5 s | 5 concurrent LLM calls |
+| Ask job (simple) | ~2 s | 1-2 tool calls |
+| Ask job (complex) | ~8 s | 4-5 tool calls, max iterations |
+
+---
+
+## Error Handling
+
+| Error type | Handling strategy |
+|---|---|
+| PDF parse failure | Job marked failed, error message shown in UI |
+| Excel parse failure | Job marked failed, specific row/column error logged |
+| Embedding API error | Retry with exponential backoff (max 3 attempts) |
+| Classification failure | Document stored without metadata, extraction continues |
+| Extraction failure | Malformed responses dropped, valid ones stored |
+| Tool SQL error | Error returned to agent, agent can retry or report "not found" |
+| Answer JSON parse failure | Raw text wrapped in `paragraph` section, UI still renders |
+
+---
+
+## Security Considerations
+
+| Concern | Current state | Recommendation |
+|---|---|---|
+| Authentication | None | Add JWT/session middleware for multi-user |
+| Document isolation | None (global DB) | Add `user_id` FK to documents, filter queries |
+| File upload validation | MIME type check only | Add virus scanning, size limits |
+| SQL injection | Drizzle ORM parameterized queries | Continue using ORM, no raw SQL with interpolation |
+| API rate limiting | None | Add express-rate-limit for public deployments |
+| Secrets management | `.env` file | Use environment variables from vault/secret manager |

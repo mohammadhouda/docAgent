@@ -29,15 +29,17 @@ export const documents = pgTable('documents', {
 });
 
 export const chunks = pgTable('chunks', {
-  id:          text('id').primaryKey(),
-  documentId:  uuid('document_id').notNull().references(() => documents.id, { onDelete: 'cascade' }),
-  content:     text('content').notNull(),
-  chunkIndex:  integer('chunk_index').notNull(),
-  pageNumber:  integer('page_number'),
-  sheetName:   text('sheet_name'),
-  rowStart:    integer('row_start'),
-  rowEnd:      integer('row_end'),
-  embedding:   vector('embedding'),
+  id:           text('id').primaryKey(),
+  documentId:   uuid('document_id').notNull().references(() => documents.id, { onDelete: 'cascade' }),
+  content:      text('content').notNull(),
+  chunkIndex:   integer('chunk_index').notNull(),
+  pageNumber:   integer('page_number'),
+  sheetName:    text('sheet_name'),
+  rowStart:     integer('row_start'),
+  rowEnd:       integer('row_end'),
+  chunkType:    text('chunk_type'),
+  sectionTitle: text('section_title'),
+  embedding:    vector('embedding'),
 });
 
 export const conversations = pgTable('conversations', {

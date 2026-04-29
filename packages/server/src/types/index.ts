@@ -6,6 +6,8 @@ export interface DocumentMetadata {
   summary?: string;
 }
 
+export type ChunkType = 'text' | 'table' | 'heading';
+
 export interface DocumentChunk {
   id: string;
   documentId: string;
@@ -14,6 +16,8 @@ export interface DocumentChunk {
   sheetName?: string;
   rowRange?: { start: number; end: number };
   chunkIndex: number;
+  chunkType?: ChunkType;
+  sectionTitle?: string;
   embedding?: number[];
 }
 

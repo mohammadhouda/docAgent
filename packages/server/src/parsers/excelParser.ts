@@ -1,34 +1,31 @@
 import ExcelJS from 'exceljs';
 import { DocumentChunk } from '../types/index.js';
-import { chunkText } from '../utils/chunker.js';
+import { estimateTokens } from '../utils/chunker.js';
 import { config } from '../config.js';
 import { extractFromWorkbook } from '../extractors/excelExtractor.js';
 import { ExtractedValue } from '../extractors/types.js';
 
-// This parser reads Excel files using ExcelJS, extracts text content from each sheet and row, and creates document chunks for indexing. It also collects warnings for empty sheets and handles large sheets by batching rows into manageable chunks. The extracted values are processed separately to ensure deterministic results without additional I/O overhead.
 function cellToString(cell: ExcelJS.Cell): string {
   const v = cell.value;
   if (v === null || v === undefined) return '';
-  // Formula cells: use result, not the formula expression
   if (typeof v === 'object' && 'result' in v) {
     const result = (v as ExcelJS.CellFormulaValue).result;
     return result === null || result === undefined ? '' : String(result);
   }
-  // For dates, ExcelJS returns a Date object, so we convert it to ISO string for consistency
   return cell.text || String(v);
 }
 
 export interface ExcelParseResult {
-  chunks: DocumentChunk[];
-  totalSheets: number;
-  warnings: string[];
+  chunks:          DocumentChunk[];
+  totalSheets:     number;
+  warnings:        string[];
   extractedValues: ExtractedValue[];
 }
 
 export async function parseExcel(filePath: string, documentId: string): Promise<ExcelParseResult> {
   const workbook = new ExcelJS.Workbook();
   const warnings: string[] = [];
-  const chunks: DocumentChunk[] = [];
+  const chunks:   DocumentChunk[] = [];
 
   await workbook.xlsx.readFile(filePath);
 
@@ -36,66 +33,127 @@ export async function parseExcel(filePath: string, documentId: string): Promise<
 
   for (const worksheet of workbook.worksheets) {
     const sheetName = worksheet.name;
-    const rowCount = worksheet.rowCount;
+    const rowCount  = worksheet.rowCount;
 
     if (rowCount === 0) {
       warnings.push(`Sheet "${sheetName}" is empty, skipped.`);
       continue;
     }
 
-    // Extract headers from first row
+    // Column headers from row 1
     const headerRow = worksheet.getRow(1);
     const headers: string[] = [];
     headerRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-      headers[colNumber - 1] = String(cell.value ?? `Column ${colNumber}`);
+      headers[colNumber - 1] = String(cell.value ?? `Col ${colNumber}`);
     });
+    const headerLine = `Headers: ${headers.filter(Boolean).join(' | ')}`;
 
-    let rowBatch: string[] = [];
-    let batchStart = 2;
-    let batchCount = 0;
+    // ── Section accumulator ─────────────────────────────────────────────────
+
+    let currentSection = '';
+    type SectionRow = { text: string; rowNum: number };
+    let sectionRows: SectionRow[] = [];
+
+    function flushSection() {
+      if (sectionRows.length === 0) return;
+
+      const prefix       = `[Sheet: ${sheetName}${currentSection ? ` | Section: ${currentSection}` : ''}]\n${headerLine}`;
+      const prefixTokens = estimateTokens(prefix);
+
+      let batch:       SectionRow[] = [];
+      let batchTokens  = prefixTokens;
+
+      function pushChunk() {
+        if (batch.length === 0) return;
+        const content = `${prefix}\n${batch.map((r) => r.text).join('\n')}`;
+        chunks.push({
+          id:           '',
+          documentId,
+          content,
+          chunkIndex:   0,
+          chunkType:    'table',
+          sectionTitle: currentSection || undefined,
+          sheetName,
+          rowRange: { start: batch[0].rowNum, end: batch[batch.length - 1].rowNum },
+        });
+      }
+
+      for (const row of sectionRows) {
+        const rowTokens = estimateTokens(row.text);
+        if (batchTokens + rowTokens > config.targetTokensTable && batch.length > 0) {
+          pushChunk();
+          // Smart overlap: carry last 2 rows into the next batch
+          const overlap    = batch.slice(-2);
+          batch            = [...overlap, row];
+          batchTokens      = prefixTokens + estimateTokens(batch.map((r) => r.text).join('\n'));
+        } else {
+          batch.push(row);
+          batchTokens += rowTokens;
+        }
+      }
+      pushChunk();
+
+      sectionRows = [];
+    }
+
+    // ── Walk data rows ──────────────────────────────────────────────────────
 
     for (let rowNum = 2; rowNum <= rowCount; rowNum++) {
-      const row = worksheet.getRow(rowNum);
-      const values: string[] = [];
-      let hasData = false;
+      const row    = worksheet.getRow(rowNum);
+      const cells: string[] = [];
+      let numericCount = 0;
 
       row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
         const header = headers[colNumber - 1] ?? `Col${colNumber}`;
-        const value = cellToString(cell);
+        const value  = cellToString(cell);
         if (value.trim()) {
-          values.push(`${header}: ${value}`);
-          hasData = true;
+          cells.push(`${header}: ${value}`);
+          const num = parseFloat(value.replace(/[,\s]/g, ''));
+          if (!isNaN(num) && num > 0) numericCount++;
         }
       });
 
-      if (hasData) {
-        rowBatch.push(`Row ${rowNum}: ${values.join(' | ')}`);
-        batchCount++;
+      if (cells.length === 0) continue;
+
+      // A section-header row has fewer than 2 numeric cells and at most 3 total cells
+      // (item-no + description only — no cost/qty/rate values filled in).
+      if (numericCount < 2 && cells.length <= 3) {
+        flushSection();
+
+        // Derive a readable section title from the cell values
+        const rawTitle = cells
+          .map((c) => c.split(': ').slice(1).join(': '))
+          .join(' — ')
+          .trim();
+        currentSection = rawTitle;
+
+        // Emit a dedicated heading chunk so the section is directly searchable
+        if (currentSection) {
+          chunks.push({
+            id:           '',
+            documentId,
+            content:      `[Sheet: ${sheetName}]\nSection: ${currentSection}`,
+            chunkIndex:   0,
+            chunkType:    'heading',
+            sectionTitle: currentSection,
+            sheetName,
+            rowRange:     { start: rowNum, end: rowNum },
+          });
+        }
+        continue;
       }
 
-      if (batchCount >= 50 || rowNum === rowCount) {
-        if (rowBatch.length > 0) {
-          const batchText = `Sheet: ${sheetName}\n${rowBatch.join('\n')}`;
-          const batchChunks = chunkText(batchText, documentId, {
-            sheetName,
-            startRow: batchStart,
-          });
-          chunks.push(...batchChunks);
-          rowBatch = [];
-          batchStart = rowNum + 1;
-          batchCount = 0;
-        }
-      }
+      sectionRows.push({ text: `Row ${rowNum}: ${cells.join(' | ')}`, rowNum });
     }
 
+    flushSection();
+
     if (rowCount > config.maxExcelRows) {
-      warnings.push(
-        `Sheet "${sheetName}" has ${rowCount} rows; large sheets were chunked in batches of 50.`
-      );
+      warnings.push(`Sheet "${sheetName}" has ${rowCount} rows; chunked in section-aware token-bounded groups.`);
     }
   }
 
-  // Assign chunk IDs after all chunks are created to ensure deterministic IDs regardless of processing order
+  // Assign deterministic IDs
   chunks.forEach((c, idx) => { c.chunkIndex = idx; c.id = `${documentId}-chunk-${idx}`; });
 
   const extractedValues = await extractFromWorkbook(workbook, documentId);

@@ -13,8 +13,12 @@ export const config = {
   documentsPath:      process.env.DOCUMENTS_PATH ?? path.join(process.cwd(), 'documents'),
   maxPdfPages:        50,
   maxExcelRows:       1000,
-  chunkSize:          6000,
-  chunkOverlap:       200,
+  // Token-based chunk sizing (1 token ≈ 4 chars).
+  // Text/clause chunks target 800 tokens; table chunks target 500 (denser content).
+  targetTokensText:   800,
+  targetTokensTable:  500,
+  overlapTokens:      75,   // carried into the next chunk at paragraph / row boundaries
+  minChunkTokens:     40,   // chunks smaller than this are merged into the preceding chunk
   maxAgentIterations: 5,
   requestTimeoutMs:   90000,
 };
