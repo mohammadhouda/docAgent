@@ -138,7 +138,7 @@ Parse → Chunk → Embed → Classify → Extract → Store
 | Stage | PDF | Excel/CSV |
 |---|---|---|
 | **Parse** | `pdf-parse` with coordinate-based line reconstruction (max 50 pages) | `exceljs` with section detection (auto-groups by section headers) |
-| **Chunk** | ~6,000 chars, 200-char overlap (section-aware, propagates headings across pages) | Token-bounded batches with smart 2-row overlap; section headers tracked |
+| **Chunk** | Token-bounded (~800 tokens text, ~500 tokens tables); 75-token smart overlap (last paragraph for text, last 2 rows for tables); section-aware, propagates headings across pages | Same token-bounded approach; section headers emit dedicated heading chunks |
 | **Embed** | `text-embedding-3-small` → 1,536-dim vectors (batches of 100) | Same |
 | **Classify** | `gpt-4o-mini` reads first 2 chunks → type, project, currency, parties, summary | Same |
 | **Extract** | `gpt-5.4-mini` per page (5 concurrent) → structured values (costs, dates, quantities, parties, percentages, open-ended types) | `gpt-5.4-mini` schema inference → column role classification (label, item_no, value, skip) + type assignment |

@@ -39,8 +39,10 @@ Upload (UI) or folder path (API)
 | Excel section detection | Auto-groups by section headers; flushes on header row change |
 | Embedding batch size | 100 texts per API call |
 | PDF extraction concurrency | 5 pages in parallel |
-| Chunk overlap | 200 characters (PDF), 2-row carry-over (Excel) |
-| Target chunk size | ~6,000 characters / ~targetTokensTable |
+| Target chunk size (text) | ~800 tokens (~3,200 chars) |
+| Target chunk size (tables) | ~500 tokens (~2,000 chars) |
+| Overlap | 75 tokens (~300 chars) — last paragraph (text) or last 2 rows (tables) |
+| Min chunk size | 40 tokens (smaller chunks merged into previous) |
 
 ---
 
@@ -88,25 +90,40 @@ Sheet names and section titles preserved for downstream filtering.
 
 (`utils/chunker.ts`)
 
-**PDF** — Section-aware chunking:
+**Token-based chunking** — Chunks are sized by token count, not characters (1 token ≈ 4 characters):
+
+| Chunk type | Target size | Overlap |
+|---|---|---|
+| Text/clauses | ~800 tokens (~3,200 chars) | Last paragraph (or last sentence if no paragraph break) |
+| Tables | ~500 tokens (~2,000 chars) | Last 2 data rows |
+| Headings | Flow into following text block | N/A |
+
+**PDF** — Section-aware token-bounded chunking:
 
 All blocks from all pages are flattened into a single stream before chunking. This allows:
 - Headings to propagate across page breaks naturally
 - Section context to be preserved even when chunks span multiple pages
 - Better semantic coherence — chunks stay within topical boundaries
 
+**Chunking rules:**
+1. Blocks are grouped until the token budget for their type is reached
+2. Type change (text → table or vice-versa) forces a flush — chunks stay homogeneous
+3. Single blocks that are too large are split at paragraph/sentence boundaries first
+4. Chunks smaller than 40 tokens are merged into the previous chunk (avoids noise)
+5. Smart overlap is appended as a prefix to the next chunk
+
 Each chunk preserves: `pageNumber`, `sectionTitle`, `chunkIndex`, `chunkType` ('heading' | 'table' | 'text')
 
 **Excel** — Token-bounded section chunking:
 
 Chunks are built per-section with smart batching:
-1. Accumulate rows within a section until token budget is exceeded
+1. Accumulate rows within a section until `targetTokensTable` (~500 tokens) is exceeded
 2. When limit hit: flush chunk, carry over last 2 rows into next batch (overlap)
 3. Section headers emit dedicated heading chunks: `[Sheet: Electrical] Section: Cable Tray Systems`
 
 Each chunk preserves: `sheetName`, `rowRange`, `sectionTitle`, `chunkIndex`, `chunkType` ('heading' | 'table')
 
-The overlap strategy ensures no data is lost at section boundaries — the last 2 rows of each batch appear in both adjacent chunks.
+The overlap strategy ensures no data is lost at section boundaries — the last 2 rows of each batch appear in both adjacent chunks, giving the next chunk column context for semantic search.
 
 ---
 
