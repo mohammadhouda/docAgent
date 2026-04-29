@@ -8,9 +8,13 @@ Built with Claude Code assisting across architecture, code generation, refactori
 
 ## How Long It Took
 
-Approximately **15-18 hours** of iterative development across 11 phases, working conversationally with Claude Code. Each phase was driven by a high-level direction ("add semantic search", "make responses structured JSON", "refactor the whole thing") and Claude Code handled the full implementation — reading existing files, planning changes across multiple files, writing code, and fixing issues that came up.
+Approximately **15–18 hours** across 11 iterative development phases.
 
-The workflow was closer to technical product management than traditional coding: decide what to build, review what was produced, course-correct, repeat.
+The project was built using an AI-assisted workflow with Claude Code as a development accelerator, but the engineering direction, architecture decisions, feature priorities, validation, and refinements were led by me throughout the process.
+
+Each phase started from a product or technical objective such as improving semantic search, introducing structured JSON responses, or refactoring parts of the system. I then used Claude Code to help implement changes faster across multiple files, while I reviewed outputs, tested behavior, identified issues, adjusted requirements, and guided the next iteration.
+
+The workflow was less about handing everything to AI and more about combining engineering judgment with AI-assisted execution to move faster while maintaining control over the system design and quality.
 
 ---
 
