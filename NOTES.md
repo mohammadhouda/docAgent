@@ -8,7 +8,7 @@ Built with Claude Code assisting across architecture, code generation, refactori
 
 ## How Long It Took
 
-Approximately **4–5 days** of iterative development across 11 phases, working conversationally with Claude Code. Each phase was driven by a high-level direction ("add semantic search", "make responses structured JSON", "refactor the whole thing") and Claude Code handled the full implementation — reading existing files, planning changes across multiple files, writing code, and fixing issues that came up.
+Approximately **15-18 hours** of iterative development across 11 phases, working conversationally with Claude Code. Each phase was driven by a high-level direction ("add semantic search", "make responses structured JSON", "refactor the whole thing") and Claude Code handled the full implementation — reading existing files, planning changes across multiple files, writing code, and fixing issues that came up.
 
 The workflow was closer to technical product management than traditional coding: decide what to build, review what was produced, course-correct, repeat.
 
