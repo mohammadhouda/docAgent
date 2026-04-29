@@ -137,11 +137,11 @@ Parse → Chunk → Embed → Classify → Extract → Store
 
 | Stage | PDF | Excel/CSV |
 |---|---|---|
-| **Parse** | `pdf-parse` per page (max 50 pages) | `exceljs` row batches (50 rows/batch) |
-| **Chunk** | ~6,000 chars, 200-char overlap (prefers paragraph/sentence boundaries) | Same, with `sheetName + rowRange` metadata |
+| **Parse** | `pdf-parse` with coordinate-based line reconstruction (max 50 pages) | `exceljs` with section detection (auto-groups by section headers) |
+| **Chunk** | ~6,000 chars, 200-char overlap (section-aware, propagates headings across pages) | Token-bounded batches with smart 2-row overlap; section headers tracked |
 | **Embed** | `text-embedding-3-small` → 1,536-dim vectors (batches of 100) | Same |
 | **Classify** | `gpt-4o-mini` reads first 2 chunks → type, project, currency, parties, summary | Same |
-| **Extract** | `gpt-4o-mini` per page → structured values (costs, dates, quantities, parties, percentages) | Deterministic column classifier (zero LLM tokens) |
+| **Extract** | `gpt-5.4-mini` per page (5 concurrent) → structured values (costs, dates, quantities, parties, percentages, open-ended types) | `gpt-5.4-mini` schema inference → column role classification (label, item_no, value, skip) + type assignment |
 | **Store** | PostgreSQL via Drizzle ORM (`documents`, `chunks`, `extracted_values`) | Same |
 
 > **Job Processing:** Upload jobs are processed by a background BullMQ worker (concurrency: 1). The UI polls for progress.
@@ -172,6 +172,7 @@ Parse → Chunk → Embed → Classify → Extract → Store
 | `compare_costs` | "Which bid is cheaper?" / "Show costs side by side" |
 | `calculate_cost_variance` | "How much more expensive is A than B?" / "What is the cost difference?" |
 | `calculate_percentage_of_total` | "What share of the budget is MEP?" / "What percentage is civil works?" |
+| `apply_percentage` | "What is the VAT-inclusive total?" / "Apply 5% retention to this amount" |
 | `calculate_unit_rate` | "What is the rate per m³ for piling?" / "Cost per m²?" |
 | `compute_difference` | "What is the difference between X and Y?" / "By how much?" |
 | `extract_dates_deliverables` | "What are the key dates?" / "When is the submission deadline?" |
@@ -303,10 +304,10 @@ doc-agent/
 |---|---|
 | **Backend** | Express, TypeScript, Node.js 18 |
 | **Frontend** | Next.js 14 (App Router), React 18, Tailwind CSS |
-| **AI** | OpenAI (`gpt-4o-mini` function calling, `text-embedding-3-small`) |
+| **AI** | OpenAI (`gpt-5.4-mini` for extraction, `gpt-4o-mini` for classification/summarization, `text-embedding-3-small`) |
 | **Database** | PostgreSQL 14+ with `pgvector` (HNSW index), Drizzle ORM |
 | **Queue** | BullMQ + Redis |
-| **Parsing** | `pdf-parse` (PDFs), `exceljs` (Excel) |
+| **Parsing** | `pdf-parse` (coordinate-based reconstruction), `exceljs` (section-aware) |
 
 ---
 

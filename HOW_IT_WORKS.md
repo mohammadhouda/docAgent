@@ -36,10 +36,11 @@ Upload (UI) or folder path (API)
 |---|---|
 | Worker concurrency | 1 (to respect OpenAI rate limits) |
 | Max PDF pages | 50 (configurable in `parsers/pdfParser.ts`) |
-| Excel batch size | 50 rows per chunk |
+| Excel section detection | Auto-groups by section headers; flushes on header row change |
 | Embedding batch size | 100 texts per API call |
-| Chunk overlap | 200 characters |
-| Target chunk size | ~6,000 characters |
+| PDF extraction concurrency | 5 pages in parallel |
+| Chunk overlap | 200 characters (PDF), 2-row carry-over (Excel) |
+| Target chunk size | ~6,000 characters / ~targetTokensTable |
 
 ---
 
@@ -47,24 +48,39 @@ Upload (UI) or folder path (API)
 
 **PDF** (`parsers/pdfParser.ts`)
 
-Uses `pdf-parse` with a `pagerender` callback to extract per-page text. Returns `string[]`, one entry per page.
+Uses `pdf-parse` with a **coordinate-based line reconstruction** algorithm:
+
+1. **Line reconstruction** — Groups raw PDF text items into visual lines using Y-coordinate proximity (items within 3 units of Y are same line; ordered left→right by X). This preserves table cell alignment that simple `join(' ')` destroys.
+
+2. **Block detection** — Classifies paragraphs into typed blocks:
+   - **Headings** — Short lines (<120 chars, ≤3 visual lines) with large font (>115% of page average) OR matching heading regex (`Article`, `Section`, `Clause`, `Schedule`, numbered headings)
+   - **Tables** — Paragraphs with more number tokens than word tokens
+   - **Text** — Everything else
+
+3. **Section tracking** — Headings set `currentSection` that propagates forward until a new heading resets it
 
 ```typescript
-// Returns: { text: string, pageNumber: number }[]
-const pages = await parsePdf(buffer);
+// Returns: { text: string, pageNumber: number, sectionTitle?: string }[]
+const pages = await parsePdf(buffer, documentId);
 ```
 
 - Pages beyond the limit (default: 50) are skipped with a warning
-- Each page's text is preserved with original line breaks
+- Section titles preserved for downstream chunk filtering
 
 **Excel / CSV** (`parsers/excelParser.ts`)
 
-Uses `exceljs` to iterate every worksheet:
+Uses `exceljs` with **section-aware chunking**:
 
 1. First row treated as column headers
-2. Data rows serialized as: `Row 5: Description: Foundation Works | Unit: m³ | Rate: 850.00`
-3. Collected in batches of 50 rows before chunking
-4. Sheet names preserved for downstream filtering
+2. **Section detection** — A row with <2 numeric cells and ≤3 total cells is treated as a section header (e.g., "Division 3 — Concrete")
+3. When a section header is found:
+   - Flushes accumulated rows from previous section
+   - Emits a dedicated heading chunk for searchability
+   - Starts accumulating rows under new section
+4. Data rows serialized as: `Row 5: Description: Foundation Works | Unit: m³ | Rate: 850.00`
+5. **Token-bounded chunking** — Batches rows until `targetTokensTable` is exceeded, then flushes with 2-row carry-over overlap
+
+Sheet names and section titles preserved for downstream filtering.
 
 ---
 
@@ -72,22 +88,25 @@ Uses `exceljs` to iterate every worksheet:
 
 (`utils/chunker.ts`)
 
-Each page or row-batch is split into segments of ~6,000 characters. The chunker uses a **boundary preference hierarchy**:
+**PDF** — Section-aware chunking:
 
-1. **Paragraph boundary** (`\n\n`) — preferred
-2. **Sentence boundary** (`. `) — fallback
-3. **Hard character cut** — last resort
+All blocks from all pages are flattened into a single stream before chunking. This allows:
+- Headings to propagate across page breaks naturally
+- Section context to be preserved even when chunks span multiple pages
+- Better semantic coherence — chunks stay within topical boundaries
 
-This ensures segments always break at natural linguistic points — mid-sentence cuts are rare.
+Each chunk preserves: `pageNumber`, `sectionTitle`, `chunkIndex`, `chunkType` ('heading' | 'table' | 'text')
 
-**Metadata preserved:**
+**Excel** — Token-bounded section chunking:
 
-| Source | Metadata fields |
-|---|---|
-| PDF | `pageNumber`, `chunkIndex` |
-| Excel | `sheetName`, `rowRange`, `chunkIndex` |
+Chunks are built per-section with smart batching:
+1. Accumulate rows within a section until token budget is exceeded
+2. When limit hit: flush chunk, carry over last 2 rows into next batch (overlap)
+3. Section headers emit dedicated heading chunks: `[Sheet: Electrical] Section: Cable Tray Systems`
 
-The 200-character overlap means any sentence that straddles a boundary appears in both adjacent chunks — nothing is silently dropped.
+Each chunk preserves: `sheetName`, `rowRange`, `sectionTitle`, `chunkIndex`, `chunkType` ('heading' | 'table')
+
+The overlap strategy ensures no data is lost at section boundaries — the last 2 rows of each batch appear in both adjacent chunks.
 
 ---
 
@@ -129,52 +148,66 @@ This metadata is stored on the `documents` row and returned by `list_documents` 
 
 ### Step 5 — Structured Extraction
 
-A second pass pulls individual typed values into the `extracted_values` table for direct SQL queries. The path differs by file type.
+A second pass pulls individual typed values into the `extracted_values` table for direct SQL queries. Both PDF and Excel now use **LLM-driven schema inference** with `gpt-5.4-mini`.
 
-#### Excel — Deterministic Extraction (`extractors/excelExtractor.ts`)
+#### Excel — LLM-Driven Schema Inference (`extractors/excelExtractor.ts`)
 
-**Zero LLM tokens** — fully regex and heuristic based:
+**Column classification via LLM** — replaces deterministic regex with semantic understanding:
 
 1. **Header detection** — scans first 10 rows, picks first row with ≥2 distinct non-empty values (skips merged title rows)
 
-2. **Column classification** — two-pass algorithm:
-   - **Pass 1:** Locate description and item-number columns
-   - **Pass 2:** Classify all others by type using regex patterns:
-     - `cost` — currency symbols, comma-separated numbers
-     - `date` — ISO, US, EU date formats
-     - `quantity` — numbers with units (m³, m², kg, etc.)
-     - `party` — organization suffixes (LLC, Co., Ltd, etc.)
-     - `percentage` — numbers with % symbol
-     - `reference` — alphanumeric codes (e.g., `A-001`, `DWG-123`)
-     - `duration` — time periods (days, weeks, months)
+2. **Sample collection** — grabs up to 5 data rows aligned with header columns
 
-3. **Cost column priority** — when multiple cost columns exist:
-   - Committed > Total Amount > Amount > Qty × Rate fallback
+3. **Schema inference** — sends headers + samples to `gpt-5.4-mini` with prompt:
+   ```
+   Classify every column as:
+     - "label"   → primary description / name of each row item
+     - "item_no" → sequential item number, code, or reference prefix
+     - "value"   → column worth extracting (with type: cost, date, percentage, quantity, party, reference, duration, unit_rate, or open-ended like risk_level, status)
+     - "skip"    → row counters, blank columns, footnotes
+   ```
 
-4. **Row walking** — rows matching `TOTAL_ROW_RE` (Grand Total, Subtotal, VAT) are skipped; each line item stored as `A-001: Foundation Works`
+4. **Role mapping** — LLM response mapped to actual Excel column numbers
 
-5. **Sheet filtering** — sheets with no item-number column (summary/aggregate sheets) are skipped entirely
+5. **Row walking** — for each data row:
+   - Skips rows matching `TOTAL_ROW_RE` (Grand Total, Subtotal, VAT)
+   - Extracts values from all columns marked as `value`
+   - Computes cost fallback: `qty × unit_rate` when no direct cost column exists
+   - Stores with `rowLabel = "A-001: Foundation Works"` format
+
+6. **Sheet filtering** — sheets with no `label` column (summary/aggregate sheets) are skipped entirely
+
+**Supported types:**
+- Standard: `cost`, `date`, `percentage`, `quantity`, `party`, `reference`, `duration`, `unit_rate`
+- Open-ended: `risk_level`, `status`, `completion_rate`, `technical_score`, `weighted_score`, `penalty_rate`, etc.
+
+**Currency detection:** Infers from column unit or header pattern (SAR, AED, USD, etc.); defaults to SAR.
 
 #### PDF — LLM-Assisted Extraction (`extractors/pdfExtractor.ts`)
 
-Each page is sent to `gpt-4o-mini` with a structured extraction prompt. The model returns a JSON array of:
+Each page is sent to `gpt-5.4-mini` with a structured extraction prompt. The model returns a JSON array of:
 
 ```typescript
 interface ExtractedValue {
-  type: 'cost' | 'date' | 'quantity' | 'party' | 'percentage' | 'reference';
+  type: string;        // snake_case: standard or LLM-invented
   label: string;
   rawValue: string;
   numericValue?: number;
-  dateValue?: string;
+  dateValue?: Date;
   unit?: string;
-  context: string;
+  context: string;     // full sentence or clause (max 200 chars)
   pageNumber: number;
 }
 ```
 
-- Up to 5 pages run concurrently
-- Malformed responses are dropped silently
-- Results stored with `pageNumber` for traceability
+**Concurrency:** Up to 5 pages processed in parallel to balance speed vs. rate limits.
+
+**Validation:**
+- Type must match snake_case pattern (`/^[a-z][a-z0-9_]*$/`)
+- Label and rawValue required
+- Malformed responses dropped silently
+
+Results stored with `pageNumber` for traceability.
 
 ---
 
@@ -287,21 +320,48 @@ The system prompt defines the agent's role and enforces hard constraints:
 
 **Role:** Senior Project Controller & Document Analyst
 
+**Model:** `gpt-5.4-mini` for extraction tasks, `gpt-4o-mini` for classification and summarization
+
 **Tool protocol:**
 - Call `list_documents` once (first turn only)
 - Skip `list_documents` if document IDs are already in the message history
+- For compound questions ("compare costs AND list parties"), make all independent tool calls in the same turn — do not wait for one to finish before starting the next
 
 **Tool routing rules:**
-- `calculate_cost_summary` → trade totals, budget breakdowns
-- `get_document_sections` → discover BOQ structure, sheet lists
-- `extract_cost_items` → line-item detail, filtering by amount/category
+- `calculate_cost_summary` → trade totals, budget breakdowns (results pre-sorted DESC — first group = highest)
+- `get_document_sections` → discover BOQ structure, sheet lists (call before filtering by category if unsure which keyword to use)
+- `extract_cost_items` → line-item detail, filtering by amount/category (results pre-sorted DESC — first item = most expensive)
+- `compare_costs` → side-by-side comparison (results pre-sorted DESC — first document = highest total)
 - `search_documents` → open-ended prose questions (clauses, specs, narrative)
+- `calculate_cost_variance` → "how much more expensive" questions
+- `calculate_percentage_of_total` → "what share/percentage" questions
+- `apply_percentage` → "VAT-inclusive total", "apply retention", "add markup" questions
+- `compute_difference` → when you already have two numbers and need the difference
+- `calculate_unit_rate` → "rate per m³/m²" questions (never divide yourself)
 - All other tools → explicit question type matches
+
+**Summary sheet subtotals handling:**
+When the response includes `summarySheetSubtotals`:
+- These are pre-aggregated cross-sheet subtotals from a summary/rollup sheet
+- Each entry represents a different scope (e.g., "BOQ", "Civil", "Phase 1")
+- The top-level `grandTotal` reflects only regular line-item sheets
+- Match the user's stated scope to the correct label in `summarySheetSubtotals`
+- **Never** sum all subtotals together or report `grandTotal` when only `summarySheetSubtotals` are present
 
 **Truth constraint:**
 - Every number, date, or party name **must** come from tool output
 - Required response when a value is not found: `"Data point not found in provided documents"`
-- No estimation, no hallucination
+- **NEVER** perform arithmetic (subtraction, division, percentage) in your head or in the final answer
+- If a difference, ratio, or percentage is needed, call the appropriate calculation tool and report its output exactly
+- LLM arithmetic is unreliable and will produce wrong answers
+
+**Fallback strategy:**
+If structured extraction returns no results — `extract_cost_items`, `calculate_cost_summary`, or `extract_quantities` returns empty:
+- Do **NOT** retry with different filters or parameters
+- The document may use non-standard structure, non-English headers, or contain data types outside the standard construction schema
+- Fall back immediately to `search_documents` to discover what the document contains
+- Then `summarize_document` for a broad overview
+- Answer from those results
 
 **Output format:**
 - Final response must be a raw JSON object
@@ -323,6 +383,7 @@ All tools query PostgreSQL directly — **no LLM calls at query time**.
 | `compare_costs` | Per-document `SUM()` with `JOIN` on `documents`; filterable by `category` and/or `documentIds` | Side-by-side cost comparison |
 | `calculate_cost_variance` | Subtraction of two `calculate_cost_summary` results | Percentage and absolute difference |
 | `calculate_percentage_of_total` | `(part / total) * 100` using two tool results | Share of budget analysis |
+| `apply_percentage` | `base + (base * rate / 100)` or `base - (base * rate / 100)` | VAT-inclusive totals, retention deductions, markup applications |
 | `calculate_unit_rate` | `SUM(cost) / SUM(quantity)` from two extractions | Rate per unit (m³, m², etc.) |
 | `compute_difference` | Simple arithmetic on two numeric tool results | Absolute difference |
 | `extract_dates_deliverables` | `WHERE type = 'date' ORDER BY date_value ASC` | Chronological milestone list |
@@ -530,11 +591,12 @@ Browser                     Server                          OpenAI
 | Operation | Typical Latency | Notes |
 |---|---|---|
 | Upload job enqueue | <10 ms | Returns before processing |
-| PDF parse (10 pages) | ~500 ms | Linear in page count |
-| Excel parse (500 rows) | ~200 ms | Linear in row count |
+| PDF parse (10 pages) | ~800 ms | Coordinate-based line reconstruction + block detection |
+| Excel parse (500 rows) | ~300 ms | Section-aware chunking with heading emission |
 | Embedding (100 chunks) | ~2 s | Batch API call |
-| Classification | ~1 s | Single LLM call |
-| PDF extraction (10 pages) | ~5 s | 5 concurrent LLM calls |
+| Classification | ~1 s | Single `gpt-4o-mini` call |
+| PDF extraction (10 pages) | ~4 s | 5 concurrent `gpt-5.4-mini` calls |
+| Excel extraction (5 sheets) | ~3 s | `gpt-5.4-mini` schema inference per sheet |
 | Ask job (simple) | ~2 s | 1-2 tool calls |
 | Ask job (complex) | ~8 s | 4-5 tool calls, max iterations |
 
