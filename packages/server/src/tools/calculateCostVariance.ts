@@ -1,6 +1,6 @@
 import { pool } from '../db/client.js';
 import { ToolResult } from '../types/index.js';
-import { likeParam } from './utils.js';
+import { resolveCategory } from './utils.js';
 
 interface DocTotalRow {
   document_id: string;
@@ -10,17 +10,13 @@ interface DocTotalRow {
   currency:    string | null;
 }
 
-// This tool calculates the cost variance between two BOQ documents. It retrieves the total cost for each document (optionally filtered by category), 
-// then computes the absolute and percentage difference. 
-// The output includes which document is higher/lower cost, and the sources cite the totals for each document.
-// for example, it can be used to compare the original BOQ with a revised version to see how costs have changed overall and by category/section if specified.
-
 export async function calculateCostVariance(args: {
   documentIdA: string;
   documentIdB: string;
   category?:   string;
 }): Promise<ToolResult> {
   const { documentIdA, documentIdB, category } = args;
+  const patterns = await resolveCategory(category);
 
   const result = await pool.query<DocTotalRow>(
     `SELECT
@@ -34,12 +30,12 @@ export async function calculateCostVariance(args: {
      WHERE ev.type = 'cost'
        AND ev.numeric_value IS NOT NULL
        AND ev.document_id = ANY($1::uuid[])
-       AND ($2::text IS NULL
-            OR COALESCE(ev.sheet_name, d.file_name) ILIKE $2
-            OR ev.label ILIKE $2)
+       AND ($2::text[] IS NULL
+            OR COALESCE(ev.sheet_name, d.file_name) ILIKE ANY($2::text[])
+            OR ev.label ILIKE ANY($2::text[]))
      GROUP BY d.id, d.file_name
      ORDER BY total DESC`,
-    [[documentIdA, documentIdB], likeParam(category)],
+    [[documentIdA, documentIdB], patterns],
   );
 
   if (result.rows.length < 2) {

@@ -1,6 +1,6 @@
 import { pool } from '../db/client.js';
 import { ToolResult } from '../types/index.js';
-import { buildSources, formatLocation, likeParam } from './utils.js';
+import { buildSources, formatLocation, resolveCategory } from './utils.js';
 
 interface CostRow {
   label:         string;
@@ -14,9 +14,6 @@ interface CostRow {
   file_name:     string;
 }
 
-// This tool extracts cost items from BOQ documents based on optional filters such as minimum/maximum amount, category (matching sheet name or item label), currency, and document ID.
-// The output includes the list of cost items with their amounts, currencies, sources, and context for citation. 
-// For example, it can be used to extract all cost items above a certain threshold in a specific section of a BOQ document.
 export async function extractCostItems(args: {
   minAmount?:  number;
   maxAmount?:  number;
@@ -25,6 +22,7 @@ export async function extractCostItems(args: {
   documentId?: string;
 }): Promise<ToolResult> {
   const { minAmount = 0, maxAmount, category, documentId } = args;
+  const patterns = await resolveCategory(category, documentId);
 
   const result = await pool.query<CostRow>(
     `SELECT
@@ -37,12 +35,12 @@ export async function extractCostItems(args: {
        AND ($1::uuid IS NULL OR ev.document_id = $1::uuid)
        AND (ev.numeric_value IS NULL OR ev.numeric_value >= $2)
        AND ($3::float IS NULL OR ev.numeric_value <= $3)
-       AND ($4::text IS NULL
-            OR COALESCE(ev.sheet_name, '') ILIKE $4
-            OR ev.label ILIKE $4)
+       AND ($4::text[] IS NULL
+            OR COALESCE(ev.sheet_name, '') ILIKE ANY($4::text[])
+            OR ev.label ILIKE ANY($4::text[]))
      ORDER BY ev.numeric_value DESC NULLS LAST
      LIMIT 200`,
-    [documentId ?? null, minAmount, maxAmount ?? null, likeParam(category)],
+    [documentId ?? null, minAmount, maxAmount ?? null, patterns],
   );
 
   if (result.rows.length === 0) {

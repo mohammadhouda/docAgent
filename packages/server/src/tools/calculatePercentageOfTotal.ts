@@ -1,5 +1,6 @@
 import { pool } from '../db/client.js';
 import { SourceReference, ToolResult } from '../types/index.js';
+import { resolveCategory } from './utils.js';
 
 interface TotalsRow {
   category_total: number;
@@ -13,22 +14,18 @@ interface GroupRow {
   subtotal:  number;
 }
 
-// This tool calculates the percentage of total cost for a given category (e.g. a trade or section) within a BOQ document.
-// It accepts a category keyword and an optional documentId to filter by a specific document. 
-// The output includes the category total, grand total, percentage, and a breakdown of matching groups for citation.
-// for example, if the category is "Electrical", it will calculate the total cost of all items in the Electrical section and divide by the grand total cost to get the percentage.
 export async function calculatePercentageOfTotal(args: {
-  category:   string;
+  category:    string;
   documentId?: string;
 }): Promise<ToolResult> {
   const { category, documentId } = args;
-  const likeFilter = `%${category}%`;
+  // category is required, so resolveCategory always returns a non-null array here
+  const patterns = (await resolveCategory(category, documentId))!;
 
-  // Category total and grand total in one pass
   const totals = await pool.query<TotalsRow>(
     `SELECT
        SUM(CASE
-         WHEN (COALESCE(ev.sheet_name, d.file_name) ILIKE $2 OR ev.label ILIKE $2)
+         WHEN (COALESCE(ev.sheet_name, d.file_name) ILIKE ANY($2::text[]) OR ev.label ILIKE ANY($2::text[]))
          THEN ev.numeric_value ELSE 0
        END)::float AS category_total,
        SUM(ev.numeric_value)::float AS grand_total,
@@ -38,7 +35,7 @@ export async function calculatePercentageOfTotal(args: {
      WHERE ev.type = 'cost'
        AND ev.numeric_value IS NOT NULL
        AND ($1::uuid IS NULL OR ev.document_id = $1::uuid)`,
-    [documentId ?? null, likeFilter],
+    [documentId ?? null, patterns],
   );
 
   const { category_total, grand_total, currency } = totals.rows[0];
@@ -52,7 +49,6 @@ export async function calculatePercentageOfTotal(args: {
 
   const percentage = (category_total / grand_total) * 100;
 
-  // Breakdown of matching groups for citation
   const groups = await pool.query<GroupRow>(
     `SELECT
        COALESCE(ev.sheet_name, d.file_name) AS group_key,
@@ -63,10 +59,10 @@ export async function calculatePercentageOfTotal(args: {
      WHERE ev.type = 'cost'
        AND ev.numeric_value IS NOT NULL
        AND ($1::uuid IS NULL OR ev.document_id = $1::uuid)
-       AND (COALESCE(ev.sheet_name, d.file_name) ILIKE $2 OR ev.label ILIKE $2)
+       AND (COALESCE(ev.sheet_name, d.file_name) ILIKE ANY($2::text[]) OR ev.label ILIKE ANY($2::text[]))
      GROUP BY COALESCE(ev.sheet_name, d.file_name), d.file_name
      ORDER BY subtotal DESC`,
-    [documentId ?? null, likeFilter],
+    [documentId ?? null, patterns],
   );
 
   const sources: SourceReference[] = groups.rows.map((r) => ({

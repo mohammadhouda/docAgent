@@ -78,27 +78,46 @@ Upload jobs are processed by a background BullMQ worker (concurrency 1). The UI 
 
 ## How Questions Work
 
-`POST /api/ask` enqueues a job and returns immediately (`202`). A worker (concurrency 3) runs an agent loop that calls up to **14 structured tools** against PostgreSQL — no arithmetic is ever done by the model itself. The frontend polls every second until the job completes.
+`POST /api/ask` enqueues a job and returns immediately (`202`). A worker (concurrency 3) runs an agent loop that calls up to **15 structured tools** against PostgreSQL — no arithmetic is ever done by the model itself. The frontend polls every second until the job completes.
+
+Each tool is described to the model in terms of the **user question it answers**, not the database operation it runs. This lets the model pick the right tool directly from natural language without intermediate reasoning steps.
 
 Tools available to the agent:
 
-| Tool | Purpose |
+| Tool | Answers questions like… |
 |---|---|
-| `list_documents` | List all loaded documents with metadata |
-| `get_document_sections` | Discover sheet names, item counts, and code prefixes |
-| `search_documents` | Semantic (pgvector) or keyword full-text search |
-| `extract_cost_items` | Line-item costs with amount and category filters |
-| `calculate_cost_summary` | Cost totals grouped by section or trade |
-| `compare_costs` | Side-by-side cost breakdown across N documents |
-| `calculate_cost_variance` | Absolute and percentage difference between two documents |
-| `calculate_percentage_of_total` | Category share of the overall project cost |
-| `calculate_unit_rate` | Cost ÷ quantity per BOQ row |
-| `compute_difference` | Arithmetic difference between two known values |
-| `extract_dates_deliverables` | Dates, milestones, and schedule events |
-| `extract_quantities` | Volumes, areas, counts, and weights |
-| `extract_parties` | Contractors, clients, consultants, subcontractors |
-| `extract_percentages` | VAT, retention, markup, and discount rates |
-| `summarize_document` | Sampled excerpt (beginning, middle, end) for scope questions |
+| `list_documents` | "What files do you have?" / "What documents are loaded?" |
+| `get_document_sections` | "What sections / trades are in this BOQ?" / "What sheets does this file have?" |
+| `search_documents` | General content, clauses, narrative, specs (semantic search via pgvector) |
+| `extract_cost_items` | "What are the most expensive items?" / "List all electrical line items" |
+| `calculate_cost_summary` | "What is the total cost?" / "Break down the cost by trade" |
+| `compare_costs` | "Which bid is cheaper?" / "Show costs side by side" |
+| `calculate_cost_variance` | "How much more expensive is A than B?" / "What is the cost difference?" |
+| `calculate_percentage_of_total` | "What share of the budget is MEP?" / "What percentage is civil works?" |
+| `calculate_unit_rate` | "What is the rate per m³ for piling?" / "Cost per m²?" |
+| `compute_difference` | "What is the difference between X and Y?" / "By how much?" |
+| `extract_dates_deliverables` | "What are the key dates?" / "When is the submission deadline?" |
+| `extract_quantities` | "What is the total concrete volume?" / "How many elevators?" |
+| `extract_parties` | "Who is the main contractor?" / "List all subcontractors" |
+| `extract_percentages` | "What is the VAT rate?" / "What retention applies?" |
+| `summarize_document` | "Summarize this document" / "What is the scope of work?" |
+
+### Semantic Category Matching
+
+All tools that accept a `category` parameter resolve it semantically rather than with a plain substring match. When a category term is supplied (e.g. `"ELC"`), the system:
+
+1. Embeds the term using `text-embedding-3-small`
+2. Finds which document sheets have the most similar chunk embeddings (cosine distance < 0.65)
+3. Builds a LIKE-pattern array — the original term plus any resolved sheet names — and filters with `ILIKE ANY(patterns)`
+
+This means abbreviations and alternate spellings are handled automatically:
+
+| User input | Resolves to |
+|---|---|
+| `"electrical"` | `%electrical%` + nearest sheets (e.g. `%Electrical Works%`) |
+| `"ELC"` | `%ELC%` + nearest sheets (e.g. `%Electrical Works%`) |
+| `"elec"` | `%elec%` + nearest sheets |
+| `"MEP"` | `%MEP%` + nearest sheets |
 
 ---
 

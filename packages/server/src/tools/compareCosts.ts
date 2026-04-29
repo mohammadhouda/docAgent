@@ -1,6 +1,6 @@
 import { pool } from '../db/client.js';
 import { ToolResult } from '../types/index.js';
-import { buildSources, likeParam } from './utils.js';
+import { buildSources, resolveCategory } from './utils.js';
 
 interface CompareRow {
   file_name:     string;
@@ -21,17 +21,16 @@ interface DocTotal {
   item_count:  number;
 }
 
-// This tool compares costs across multiple BOQ documents, optionally filtered by category (e.g. trade/section).
 export async function compareCosts(args: {
   category?:    string;
   documentIds?: string[];
 }): Promise<ToolResult> {
   const { category, documentIds } = args;
 
-  const idsFilter  = documentIds && documentIds.length > 0 ? documentIds : null;
-  const likeFilter = likeParam(category);
+  const idsFilter = documentIds && documentIds.length > 0 ? documentIds : null;
+  // Use first document ID as a hint for sheet-name lookup (heuristic for multi-doc comparisons)
+  const patterns  = await resolveCategory(category, documentIds?.[0]);
 
-  // Per-item breakdown across documents
   const rows = await pool.query<CompareRow>(
     `SELECT d.file_name, d.id AS document_id,
             ev.label, ev.numeric_value, ev.unit,
@@ -40,16 +39,15 @@ export async function compareCosts(args: {
      JOIN documents d ON ev.document_id = d.id
      WHERE ev.type = 'cost'
        AND ev.numeric_value IS NOT NULL
-       AND ($1::text IS NULL
-            OR COALESCE(ev.sheet_name, d.file_name) ILIKE $1
-            OR ev.label ILIKE $1)
+       AND ($1::text[] IS NULL
+            OR COALESCE(ev.sheet_name, d.file_name) ILIKE ANY($1::text[])
+            OR ev.label ILIKE ANY($1::text[]))
        AND ($2::uuid[] IS NULL OR ev.document_id = ANY($2::uuid[]))
      ORDER BY ev.numeric_value DESC
      LIMIT 300`,
-    [likeFilter, idsFilter],
+    [patterns, idsFilter],
   );
 
-  // Grand total per document
   const totals = await pool.query<DocTotal>(
     `SELECT d.file_name, d.id AS document_id,
             SUM(ev.numeric_value)::float AS total,
@@ -58,20 +56,19 @@ export async function compareCosts(args: {
      JOIN documents d ON ev.document_id = d.id
      WHERE ev.type = 'cost'
        AND ev.numeric_value IS NOT NULL
-       AND ($1::text IS NULL
-            OR COALESCE(ev.sheet_name, d.file_name) ILIKE $1
-            OR ev.label ILIKE $1)
+       AND ($1::text[] IS NULL
+            OR COALESCE(ev.sheet_name, d.file_name) ILIKE ANY($1::text[])
+            OR ev.label ILIKE ANY($1::text[]))
        AND ($2::uuid[] IS NULL OR ev.document_id = ANY($2::uuid[]))
      GROUP BY d.file_name, d.id
      ORDER BY total DESC`,
-    [likeFilter, idsFilter],
+    [patterns, idsFilter],
   );
 
   if (rows.rows.length === 0) {
     return { success: false, data: 'No matching cost items found across documents.', sources: [] };
   }
 
-  // Group items by document for a structured comparison
   const byDoc = new Map<string, { fileName: string; items: typeof rows.rows }>();
   for (const r of rows.rows) {
     if (!byDoc.has(r.document_id)) byDoc.set(r.document_id, { fileName: r.file_name, items: [] });

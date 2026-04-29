@@ -23,10 +23,10 @@ export const toolDefinitions: OpenAI.Chat.ChatCompletionTool[] = [
     function: {
       name: 'list_documents',
       description:
-        'List all currently loaded documents with their IDs, types, metadata (project name, ' +
-        'document type, currency, parties), and chunk counts. ' +
-        'ALWAYS call this first on any new conversation to understand what files are available ' +
-        'before calling other tools.',
+        'Answer "what files are loaded?" or "what documents do you have?". ' +
+        'Returns each document\'s ID, type, project metadata, and sheet/page counts. ' +
+        'ALWAYS call this once at the start of a new conversation — the document IDs returned here ' +
+        'are required by every other tool. Skip if IDs are already in the conversation history.',
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
@@ -35,13 +35,13 @@ export const toolDefinitions: OpenAI.Chat.ChatCompletionTool[] = [
     function: {
       name: 'search_documents',
       description:
-        'Semantically search across all loaded documents for content relevant to a query. ' +
-        'Use this for general questions about document content, clauses, terms, and narrative text. ' +
-        'Prefers embedding-based similarity search; falls back to keyword search when embeddings are unavailable.',
+        'Answer questions about document content when no structured tool fits — contract clauses, ' +
+        'scope descriptions, narrative text, specifications, or vague cross-document questions. ' +
+        'Uses semantic similarity when embeddings are available; falls back to keyword search.',
       parameters: {
         type: 'object',
         properties: {
-          query:      { type: 'string', description: 'Natural-language search query' },
+          query:      { type: 'string', description: 'Natural-language question or search phrase' },
           maxResults: { type: 'number', description: 'Max results to return (default 8)' },
         },
         required: ['query'],
@@ -53,10 +53,10 @@ export const toolDefinitions: OpenAI.Chat.ChatCompletionTool[] = [
     function: {
       name: 'get_document_sections',
       description:
-        'Discover the internal structure of loaded documents: sheet names, their item counts, ' +
-        'cost totals per sheet, and item-code letter prefixes (A, B, M, E…) for single-sheet BOQs. ' +
-        'Call this when the user asks "what sections are in this BOQ?", "what trades does this file cover?", ' +
-        'or before filtering by category to know which keyword to use.',
+        'Answer "what sections / trades are in this BOQ?" or "what sheets does this file have?". ' +
+        'Also call this before filtering by category when you are unsure which keyword to use — ' +
+        'it shows sheet names, item counts, cost totals per sheet, and item-code letter prefixes ' +
+        '(A, B, M, E…) for single-sheet BOQs.',
       parameters: {
         type: 'object',
         properties: {
@@ -71,17 +71,18 @@ export const toolDefinitions: OpenAI.Chat.ChatCompletionTool[] = [
     function: {
       name: 'extract_cost_items',
       description:
-        'Extract individual line-item costs from a BOQ or cost document. ' +
-        'Returns item codes, descriptions, and amounts ordered by value. ' +
-        'Use for questions like "list items above X SAR", "most expensive items", or "list all MEP items". ' +
-        'Always pass a documentId from list_documents.',
+        'Answer "what are the most expensive items?", "list all electrical line items", or ' +
+        '"show items above 100,000 SAR". Returns individual BOQ line items ordered by value ' +
+        '(descending — first item = most expensive). ' +
+        'Always pass documentId from list_documents. Use category to narrow by trade or section; ' +
+        'similar terms like "electrical", "elec", and "ELC" are automatically matched via embeddings.',
       parameters: {
         type: 'object',
         properties: {
           documentId: { type: 'string', description: 'Document ID from list_documents (required)' },
           minAmount:  { type: 'number', description: 'Minimum amount to include (default 0)' },
-          maxAmount:  { type: 'number', description: 'Maximum amount to include (no default)' },
-          category:   { type: 'string', description: 'Trade or section keyword to filter by (e.g. "MEP", "civil", "electrical"). Matches sheet name or item description.' },
+          maxAmount:  { type: 'number', description: 'Maximum amount to include' },
+          category:   { type: 'string', description: 'Trade or section to filter by (e.g. "electrical", "ELC", "civil", "MEP"). Matched semantically — abbreviations and alternate spellings are resolved automatically.' },
           currency:   { type: 'string', description: 'Currency code (default SAR)' },
         },
         required: ['documentId'],
@@ -93,15 +94,16 @@ export const toolDefinitions: OpenAI.Chat.ChatCompletionTool[] = [
     function: {
       name: 'calculate_cost_summary',
       description:
-        'Group and sum costs by section or trade to get a cost breakdown. ' +
-        'Use for questions like "total cost per section", "breakdown by trade", "MEP budget", or "what is the total project cost". ' +
-        'Pass category to filter by trade name (e.g. "MEP", "civil", "HVAC") — matches both sheet names and item descriptions. ' +
-        'Returns a grand total and per-section totals.',
+        'Answer "what is the total cost?", "break down the cost by trade", "what is the civil section budget?", ' +
+        'or "which section costs most?". Groups costs by sheet/section and returns a grand total plus ' +
+        'per-section subtotals ordered descending (first = highest). ' +
+        'Pass category to filter by trade — similar terms like "electrical", "elec", and "ELC" are ' +
+        'resolved automatically via embeddings.',
       parameters: {
         type: 'object',
         properties: {
           documentId: { type: 'string', description: 'Document ID from list_documents. Omit to summarise across all documents.' },
-          category:   { type: 'string', description: 'Trade or section keyword to filter by (e.g. "MEP", "civil works", "HVAC", "electrical"). Matches sheet name or item description.' },
+          category:   { type: 'string', description: 'Trade or section to filter by (e.g. "MEP", "civil works", "electrical", "ELC"). Matched semantically.' },
         },
         required: [],
       },
@@ -112,13 +114,13 @@ export const toolDefinitions: OpenAI.Chat.ChatCompletionTool[] = [
     function: {
       name: 'compare_costs',
       description:
-        'Compare costs across multiple uploaded documents side by side. ' +
-        'Use when the user has multiple BOQs or bids and asks "which is cheaper", "compare costs", or "how do these differ". ' +
-        'Optionally filter by a category keyword (e.g. "MEP", "HVAC", "civil").',
+        'Answer "which bid is cheaper?", "compare these two quotes", or "show me costs side by side". ' +
+        'Returns totals for each document ordered descending (first = highest) plus a line-item breakdown. ' +
+        'Use calculate_cost_variance instead when you need a focused A-vs-B difference with a percentage.',
       parameters: {
         type: 'object',
         properties: {
-          category:    { type: 'string',               description: 'Optional keyword to filter by (e.g. "HVAC", "civil works")' },
+          category:    { type: 'string',               description: 'Trade or section keyword to filter by (e.g. "HVAC", "civil works"). Matched semantically.' },
           documentIds: { type: 'array', items: { type: 'string' }, description: 'Limit comparison to these document IDs from list_documents' },
         },
         required: [],
@@ -130,8 +132,8 @@ export const toolDefinitions: OpenAI.Chat.ChatCompletionTool[] = [
     function: {
       name: 'extract_dates_deliverables',
       description:
-        'Extract dates, deadlines, milestones, and schedule events from documents. ' +
-        'Use for questions about timelines, submission deadlines, or project schedule.',
+        'Answer "what are the key dates?", "when is the submission deadline?", or ' +
+        '"list all milestones". Extracts dates, deadlines, and schedule events from documents.',
       parameters: {
         type: 'object',
         properties: {
@@ -146,8 +148,8 @@ export const toolDefinitions: OpenAI.Chat.ChatCompletionTool[] = [
     function: {
       name: 'extract_quantities',
       description:
-        'Extract measured quantities (volumes, areas, counts, weights) from BOQ documents. ' +
-        'Use for questions like "total concrete volume", "how many elevators", or "what quantity of steel". ' +
+        'Answer "what is the total concrete volume?", "how many elevators?", or ' +
+        '"what quantity of steel?". Extracts measured quantities from BOQ documents. ' +
         'Can filter by unit (m², m³, ton, etc.) and minimum value.',
       parameters: {
         type: 'object',
@@ -165,8 +167,8 @@ export const toolDefinitions: OpenAI.Chat.ChatCompletionTool[] = [
     function: {
       name: 'extract_parties',
       description:
-        'Extract named parties (contractors, clients, subcontractors, consultants) from documents. ' +
-        'Use for questions like "who is the main contractor", "list all subcontractors", or "who is the employer".',
+        'Answer "who is the main contractor?", "list all subcontractors", or "who is the employer?". ' +
+        'Extracts named parties (contractors, clients, subcontractors, consultants) from documents.',
       parameters: {
         type: 'object',
         properties: {
@@ -182,8 +184,8 @@ export const toolDefinitions: OpenAI.Chat.ChatCompletionTool[] = [
     function: {
       name: 'extract_percentages',
       description:
-        'Extract percentage values such as VAT, retention, markup, margin, and discount rates from documents. ' +
-        'Use for questions about rates, percentages, or financial ratios.',
+        'Answer "what is the VAT rate?", "what is the retention percentage?", or ' +
+        '"what markup applies?". Extracts percentage values such as VAT, retention, markup, and discount rates.',
       parameters: {
         type: 'object',
         properties: {
@@ -198,11 +200,10 @@ export const toolDefinitions: OpenAI.Chat.ChatCompletionTool[] = [
     function: {
       name: 'apply_percentage',
       description:
-        'Apply a percentage rate to a known base amount — use for VAT-inclusive totals, retention deductions, ' +
-        'markup additions, or any "base × rate" calculation. ' +
-        'Use operation "add" to get the inclusive total (e.g. contract value + VAT), ' +
-        '"subtract" to remove a rate (e.g. total minus retention). ' +
-        'NEVER compute this yourself — always call this tool when you have a base amount and a rate from tool output.',
+        'Answer "what is the VAT-inclusive total?", "contract value after retention deduction", or ' +
+        '"total with markup". Apply a percentage rate to a base amount from tool output. ' +
+        'Use "add" for VAT-inclusive totals or markup; "subtract" for retention or discount deductions. ' +
+        'NEVER compute this yourself — always call this tool when you have a base amount and a rate.',
       parameters: {
         type: 'object',
         properties: {
@@ -221,10 +222,10 @@ export const toolDefinitions: OpenAI.Chat.ChatCompletionTool[] = [
     function: {
       name: 'compute_difference',
       description:
-        'Compute the exact arithmetic difference between two known numeric values. ' +
-        'Use this whenever you have two numbers from tool output and need the difference, ' +
-        'percentage gap, or to identify which is higher — for example after finding two contract ' +
-        'values with extract_cost_items. NEVER subtract numbers yourself; always call this tool.',
+        'Answer "what is the difference between X and Y?", "by how much is A higher than B?", or ' +
+        '"what percentage gap is there?". Computes the exact arithmetic difference between two numeric ' +
+        'values already retrieved from tool output. ' +
+        'NEVER subtract numbers yourself — always call this tool.',
       parameters: {
         type: 'object',
         properties: {
@@ -242,13 +243,14 @@ export const toolDefinitions: OpenAI.Chat.ChatCompletionTool[] = [
     function: {
       name: 'calculate_percentage_of_total',
       description:
-        'Calculate what percentage of the total project cost a specific trade or category represents. ' +
-        'Use for questions like "what share of the BOQ is MEP?", "what percentage is civil works?", ' +
-        '"what fraction of the budget is structural?". Returns category total, grand total, and exact percentage.',
+        'Answer "what share of the budget is MEP?", "what percentage is civil works?", or ' +
+        '"what fraction of total cost is electrical?". Returns category total, grand total, and ' +
+        'the exact percentage — do NOT compute this yourself. ' +
+        'Category is matched semantically, so "ELC", "elec", and "electrical" all resolve correctly.',
       parameters: {
         type: 'object',
         properties: {
-          category:   { type: 'string', description: 'Trade or section keyword (e.g. "MEP", "civil", "electrical"). Matches sheet name or item label.' },
+          category:   { type: 'string', description: 'Trade or section keyword (e.g. "MEP", "civil", "electrical", "ELC"). Matched semantically via embeddings.' },
           documentId: { type: 'string', description: 'Document ID from list_documents. Omit to calculate across all documents.' },
         },
         required: ['category'],
@@ -260,15 +262,15 @@ export const toolDefinitions: OpenAI.Chat.ChatCompletionTool[] = [
     function: {
       name: 'calculate_cost_variance',
       description:
-        'Calculate the absolute and percentage difference in cost between two documents. ' +
-        'Use for questions like "how much more expensive is bid A than bid B?", "what is the cost difference?", ' +
-        '"which bid is cheaper and by how much?". Returns both totals, the absolute difference, and % difference.',
+        'Answer "how much more expensive is bid A than bid B?", "what is the cost difference?", or ' +
+        '"which bid is cheaper and by how much?". Returns both document totals, the absolute difference, ' +
+        'and the percentage difference — all pre-computed.',
       parameters: {
         type: 'object',
         properties: {
           documentIdA: { type: 'string', description: 'First document ID (from list_documents)' },
           documentIdB: { type: 'string', description: 'Second document ID (from list_documents)' },
-          category:    { type: 'string', description: 'Optional trade/section keyword to limit the comparison (e.g. "MEP", "civil")' },
+          category:    { type: 'string', description: 'Optional trade/section keyword to limit the comparison (e.g. "MEP", "civil"). Matched semantically.' },
         },
         required: ['documentIdA', 'documentIdB'],
       },
@@ -279,9 +281,10 @@ export const toolDefinitions: OpenAI.Chat.ChatCompletionTool[] = [
     function: {
       name: 'calculate_unit_rate',
       description:
-        'Calculate the cost per unit for BOQ line items by dividing the cost value by the quantity on the same row. ' +
-        'Use for questions like "what is the rate per m³ for piling?", "cost per m² for the slab", ' +
-        '"what is the unit rate for reinforcement?". Requires the BOQ to have both cost and quantity columns.',
+        'Answer "what is the rate per m³ for piling?", "cost per m² for the slab", or ' +
+        '"what is the unit rate for reinforcement?". Divides the cost column by the quantity column ' +
+        'on the same BOQ row. Requires a BOQ with both cost and quantity columns. ' +
+        'Do NOT divide these yourself.',
       parameters: {
         type: 'object',
         properties: {
@@ -297,8 +300,8 @@ export const toolDefinitions: OpenAI.Chat.ChatCompletionTool[] = [
     function: {
       name: 'summarize_document',
       description:
-        'Get a structured excerpt from a specific document (beginning, middle, end) ' +
-        'for summarization or scope-of-work questions. Requires a documentId.',
+        'Answer "summarize this document" or "what is the scope of work?". Samples the beginning, ' +
+        'middle, and end of a document to give a broad overview. Requires a documentId from list_documents.',
       parameters: {
         type: 'object',
         properties: {
