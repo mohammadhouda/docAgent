@@ -52,9 +52,14 @@ export async function calculateCostSummary(args: {
   }
 
   const currency      = result.rows[0].currency ?? 'SAR';
-  const regularRows   = result.rows.filter((r) => !r.is_summary_row);
   const summaryRows   = result.rows.filter((r) => r.is_summary_row);
-  const grandTotal    = regularRows.reduce((s, r) => s + r.total, 0);
+  const regularRows   = result.rows.filter((r) => !r.is_summary_row);
+  
+  // If summary sheet exists, use ONLY summary sheet categories (they are aggregates of line items)
+  // This prevents double-counting: BOQ_Items line items + Summary sheet totals = same data twice
+  const hasSummarySheet = summaryRows.length > 0;
+  const groupsToUse = hasSummarySheet ? summaryRows : regularRows;
+  const grandTotal    = groupsToUse.reduce((s, r) => s + r.total, 0);
 
   const sources: SourceReference[] = result.rows.map((r) => ({
     documentName: r.file_name,
@@ -66,7 +71,7 @@ export async function calculateCostSummary(args: {
     grandTotal,
     currency,
     categoryFilter: category ?? null,
-    groups: regularRows.map((r) => ({
+    groups: groupsToUse.map((r) => ({
       section:   r.group_key,
       document:  r.file_name,
       total:     r.total,
@@ -74,16 +79,6 @@ export async function calculateCostSummary(args: {
       currency,
     })),
   };
-
-  if (summaryRows.length > 0) {
-    data.summarySheetSubtotals = summaryRows.map((r) => ({
-      label:    r.group_key,
-      sheet:    r.sheet_name_raw,
-      document: r.file_name,
-      total:    r.total,
-      currency,
-    }));
-  }
 
   return { success: true, data, sources };
 }

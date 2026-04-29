@@ -15,6 +15,9 @@ import { calculatePercentageOfTotal } from './calculatePercentageOfTotal.js';
 import { calculateCostVariance }      from './calculateCostVariance.js';
 import { calculateUnitRate }          from './calculateUnitRate.js';
 import { computeDifference }          from './computeDifference.js';
+import { computeSum }                 from './computeSum.js';
+import { queryScheduleByStatus }      from './queryScheduleByStatus.js';
+import { queryBudgetVariance }        from './queryBudgetVariance.js';
 import { applyPercentage }            from './applyPercentage.js';
 
 export const toolDefinitions: OpenAI.Chat.ChatCompletionTool[] = [
@@ -311,6 +314,63 @@ export const toolDefinitions: OpenAI.Chat.ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'compute_sum',
+      description:
+        'Answer "what is the total?", "what is the combined value?", or "sum these amounts". ' +
+        'Adds up an array of numeric values — use this when you have multiple values from tool outputs ' +
+        'and need their total. NEVER sum values yourself; always call this tool. ' +
+        'Returns the total, count of items, and optionally a breakdown with labels.',
+      parameters: {
+        type: 'object',
+        properties: {
+          values: { type: 'array', items: { type: 'number' }, description: 'Array of numeric values to sum' },
+          label:  { type: 'string', description: 'Label for the total (e.g. "Combined Contract Value", "Total MEP Cost")' },
+          items:  { type: 'array', items: { type: 'string' }, description: 'Optional labels for each value (e.g. vendor names, item descriptions) for traceability' },
+        },
+        required: ['values'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'query_schedule_by_status',
+      description:
+        'Answer "which tasks are in progress?", "what is completed?", or "show me not started activities". ' +
+        'Query project schedule/programme documents to find tasks matching a specific status. ' +
+        'Returns task ID, description, responsible party, start/end dates, and status. ' +
+        'Requires a documentId from list_documents.',
+      parameters: {
+        type: 'object',
+        properties: {
+          status:     { type: 'string', description: 'Status to filter by (e.g. "In Progress", "Completed", "Not Started")' },
+          documentId: { type: 'string', description: 'Document ID from list_documents (required)' },
+        },
+        required: ['status', 'documentId'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'query_budget_variance',
+      description:
+        'Answer "what is the budget vs actual?", "which categories are over budget?", or "what is the project cost position?". ' +
+        'Query cost tracking documents to compare budget vs actual spending. ' +
+        'Returns total budget, total actual spend, variance, and per-category breakdown with over-budget items flagged. ' +
+        'Requires a documentId from list_documents.',
+      parameters: {
+        type: 'object',
+        properties: {
+          documentId: { type: 'string', description: 'Document ID from list_documents (required)' },
+        },
+        required: ['documentId'],
+      },
+    },
+  },
 ];
 
 export async function executeTool(
@@ -342,6 +402,12 @@ export async function executeTool(
       return await applyPercentage(args as { baseAmount: number; rate: number; operation?: 'add' | 'subtract'; labelBase?: string; labelRate?: string });
     case 'compute_difference':
       return await computeDifference(args as { valueA: number; labelA?: string; valueB: number; labelB?: string });
+    case 'compute_sum':
+      return await computeSum(args as { values: number[]; label?: string; items?: string[] });
+    case 'query_schedule_by_status':
+      return await queryScheduleByStatus(args as { status: string; documentId?: string });
+    case 'query_budget_variance':
+      return await queryBudgetVariance(args as { documentId?: string });
     case 'calculate_percentage_of_total':
       return await calculatePercentageOfTotal(args as { category: string; documentId?: string });
     case 'calculate_cost_variance':

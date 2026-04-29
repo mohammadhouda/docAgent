@@ -24,6 +24,7 @@ export async function extractCostItems(args: {
   const { minAmount = 0, maxAmount, category, documentId } = args;
   const patterns = await resolveCategory(category, documentId);
 
+  // Exclude summary/rollup/consolidated sheets — these contain aggregate subtotals, not line items.
   const result = await pool.query<CostRow>(
     `SELECT
        ev.label, ev.raw_value, ev.numeric_value, ev.unit,
@@ -38,6 +39,9 @@ export async function extractCostItems(args: {
        AND ($4::text[] IS NULL
             OR COALESCE(ev.sheet_name, '') ILIKE ANY($4::text[])
             OR ev.label ILIKE ANY($4::text[]))
+       AND LOWER(COALESCE(ev.sheet_name, '')) NOT LIKE '%summary%'
+       AND LOWER(COALESCE(ev.sheet_name, '')) NOT LIKE '%rollup%'
+       AND LOWER(COALESCE(ev.sheet_name, '')) NOT LIKE '%consolidated%'
      ORDER BY ev.numeric_value DESC NULLS LAST
      LIMIT 200`,
     [documentId ?? null, minAmount, maxAmount ?? null, patterns],
