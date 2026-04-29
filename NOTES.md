@@ -26,7 +26,7 @@ The workflow was closer to technical product management than traditional coding:
 | 6 | Structured JSON responses — typed section schema, system prompt rewrite, `StructuredAnswer.tsx` renderer |
 | 7 | PostgreSQL persistence — Drizzle ORM, pgvector, BullMQ upload queue, conversation history |
 | 8 | Structured value extraction — deterministic Excel column classifier, per-page LLM extraction for PDFs |
-| 9 | Tool expansion (5 → 11) — `calculate_cost_summary`, `compare_costs`, `extract_quantities`, `extract_parties`, `extract_percentages`, `get_document_sections`; `category` filter added |
+| 9 | Tool expansion (5 → 16) — `calculate_cost_summary`, `compare_costs`, `extract_quantities`, `extract_parties`, `extract_percentages`, `get_document_sections`; `category` filter added |
 | 10 | Refactor pass — dead code removed, misleading names fixed, model name bug corrected, broken polling removed |
 | 11 | Async ask queue — `POST /api/ask` converted from blocking to BullMQ job, eliminates socket hangouts |
 
