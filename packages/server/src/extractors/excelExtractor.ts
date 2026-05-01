@@ -5,7 +5,7 @@ import { openaiClient } from '../services/openai.js';
 
 // ─── LLM-driven schema inference ─────────────────────────────────────────────
 
-type ColRole = 'label' | 'item_no' | 'value' | 'skip';
+type ColRole = 'label' | 'item_no' | 'value' | 'category' | 'skip';
 
 interface ColSchema {
   colIndex: number; // 1-based position in the header list sent to the LLM
@@ -22,17 +22,31 @@ For each column return:
   colIndex — the 1-based column number exactly as shown in the input
   header   — exact header text
   role     — one of:
-               "label"   the primary description / name of each row item
-               "item_no" sequential item number, code, or reference prefix
-               "value"   a column worth extracting structured data from
-               "skip"    row counters, blank columns, footnotes, or anything not useful
+               "label"     the primary description / name of each row item
+               "item_no"   sequential item number, code, or reference prefix
+               "value"     a column worth extracting structured data from
+               "category"  a column that groups items into sections/trades/categories (e.g. "MEP Works", "Concrete", "Structural & Facade")
+               "skip"      row counters, blank columns, footnotes, or anything not useful
   type     — required when role is "value"; use a standard type where it fits:
                 cost, date, percentage, quantity, party, reference, duration, unit_rate
-             or invent a descriptive snake_case type for anything else:
+             
+             For COST/monetary columns, you MUST distinguish between different cost types:
+                - "budget" or "budgeted_cost" — planned/budgeted amounts, total contract value
+                - "actual" or "actual_cost" — amounts already paid/spent to date
+                - "committed" or "committed_cost" — funds reserved/committed but not yet spent (e.g. approved but unpaid commitments)
+                - "variance" — difference between budget and actual (can be negative)
+                - "outstanding" — unpaid balance still owed to vendor/supplier (use for accounts payable, outstanding invoices)
+                - "unit_rate" — price per unit
+                - "cost" — use ONLY for the primary/total cost column when no other distinction applies
+             
+             For other types use descriptive snake_case:
                 risk_level, status, completion_rate, technical_score, weighted_score …
-             If multiple columns are monetary, mark the most authoritative one "cost"
-             and the others with specific names (budgeted_cost, committed_cost, …).
+             
   unit     — optional: SAR, AED, USD, %, m², m³, months, days, …
+
+IMPORTANT: 
+  - If a column is named "Category", "Trade", "Section", "Discipline", or "Work Section", it should have role "category".
+  - When there are multiple monetary columns (Budget, Actual, Variance), give each a DISTINCT type (budget, actual, variance) — do NOT mark them all as "cost".
 
 Return ONLY a JSON object with a single key "columns" containing the array.`;
 
@@ -108,6 +122,14 @@ function isPercentFormat(cell: ExcelJS.Cell): boolean {
   return (cell.numFmt ?? '').includes('%');
 }
 
+// ─── Sheet-level guard ───────────────────────────────────────────────────────
+
+// Skip summary/roll-up sheets entirely during value extraction.
+// Their rows are aggregates of line-item data already present in other sheets;
+// ingesting them would cause every aggregation query to double-count.
+// Chunks from these sheets are still indexed for text search by the chunker.
+const SUMMARY_SHEET_RE = /\b(summary|rollup|roll[- ]up|consolidated|overview|totals?|front[- ]sheet|cover)\b/i;
+
 // ─── Row-level guard ──────────────────────────────────────────────────────────
 
 // Skip rows whose label IS purely an aggregate keyword ("Grand Total", "Subtotal", "VAT").
@@ -126,6 +148,7 @@ export async function extractFromWorkbook(
   for (const ws of workbook.worksheets) {
     if (ws.rowCount === 0) continue;
     const sheetName = ws.name;
+    if (SUMMARY_SHEET_RE.test(sheetName)) continue;
 
     // Find the real header row: first row with ≥ 2 distinct non-empty cell values.
     let headerRowNum = 1;
@@ -163,17 +186,38 @@ export async function extractFromWorkbook(
 
     if (schema.length === 0) continue;
 
+    // Normalize types based on header keywords — LLM often marks all monetary columns as "cost"
+    // or confuses similar types. We override based on header keywords for consistency.
+    const normalizeType = (header: string, inferredType: string): string => {
+      const h = header.toLowerCase();
+      // Force specific types based on header keywords, regardless of LLM inference
+      if (h.includes('outstanding') || h.includes('balance') || h.includes('payable') || h.includes('amount owed')) {
+        return 'outstanding';
+      }
+      if (h.includes('contract')) return 'contract_value';
+      if (h.includes('budget') || h.includes('planned')) return 'budget';
+      if (h.includes('actual') || h.includes('spent') || h.includes('paid') || h.includes('to date')) return 'actual';
+      if (h.includes('variance') || h.includes('difference')) return 'variance';
+      if (h.includes('committed') && !h.includes('outstanding')) return 'committed_cost';
+      return inferredType;
+    };
+
     // Map actual Excel colNum → ColSchema using the LLM's 1-based colIndex.
     const schemaByColNum = new Map<number, ColSchema>();
-    let labelColNum:  number | null = null;
-    let itemNoColNum: number | null = null;
+    let labelColNum:    number | null = null;
+    let itemNoColNum:   number | null = null;
+    let categoryColNum: number | null = null;
 
     for (const entry of schema) {
       const hc = headerCols[entry.colIndex - 1];
       if (!hc) continue;
-      schemaByColNum.set(hc.colNum, entry);
-      if (entry.role === 'label'   && labelColNum  === null) labelColNum  = hc.colNum;
-      if (entry.role === 'item_no' && itemNoColNum === null) itemNoColNum = hc.colNum;
+      // Apply type normalization
+      const normalizedType = normalizeType(hc.header, entry.type ?? '');
+      const normalizedEntry = { ...entry, type: normalizedType };
+      schemaByColNum.set(hc.colNum, normalizedEntry);
+      if (entry.role === 'label'    && labelColNum    === null) labelColNum    = hc.colNum;
+      if (entry.role === 'item_no'  && itemNoColNum   === null) itemNoColNum   = hc.colNum;
+      if (entry.role === 'category' && categoryColNum === null) categoryColNum = hc.colNum;
     }
 
     // All columns the LLM marked as extractable values.
@@ -206,16 +250,32 @@ export async function extractFromWorkbook(
 
       const labelCell   = labelColNum  ? row.getCell(labelColNum)  : null;
       const itemNoCell  = itemNoColNum ? row.getCell(itemNoColNum) : null;
-      const description = labelCell ? getCellText(labelCell).trim() : '';
+      const categoryCell = categoryColNum ? row.getCell(categoryColNum) : null;
+
+      // Use explicit category column value if available, otherwise fall back to label cell
+      const explicitCategory = categoryCell ? getCellText(categoryCell).trim() : '';
+      const labelDescription = labelCell ? getCellText(labelCell).trim() : '';
+      
+      // Description: prefer label cell, but fall back to category if no label column exists
+      const description = labelDescription || explicitCategory;
       if (!description || TOTAL_ROW_RE.test(description)) continue;
 
-      // A row with a description but no numeric value in any value column is a section header.
-      // Track it as the current section context without emitting any extracted value.
-      const hasNumericValue = valueColumns.some(([colNum]) => {
-        const n = getCellNumber(row.getCell(colNum));
-        return n !== undefined && n !== 0;
+      // A row with a description but nothing in any value column is a section header.
+      // Use type-aware checks: numeric types need a positive number; date types need a
+      // valid date; everything else (status, party, reference…) needs non-empty text.
+      // This ensures schedule/risk rows (whose value columns are dates and text, not
+      // numbers) are not silently classified as section headers and discarded.
+      const NUMERIC_TYPES = new Set(['cost', 'quantity', 'percentage', 'unit_rate', 'duration']);
+      const hasDataValue = valueColumns.some(([colNum, s]) => {
+        const cell = row.getCell(colNum);
+        if (NUMERIC_TYPES.has(s.type!)) {
+          const n = getCellNumber(cell);
+          return n !== undefined && n !== 0;
+        }
+        if (s.type === 'date') return !!getCellDate(cell);
+        return getCellText(cell).trim().length > 0;
       });
-      if (!hasNumericValue && valueColumns.length > 0) {
+      if (!hasDataValue && valueColumns.length > 0) {
         currentSection = description;
         continue;
       }
@@ -233,6 +293,10 @@ export async function extractFromWorkbook(
         }
       });
       if (parts.length === 0) continue;
+      
+      // Determine sectionTitle: explicit category column takes priority, then fallback to detected section
+      const rowSectionTitle = explicitCategory || currentSection || undefined;
+      
       const sectionLabel = currentSection ? ` > ${currentSection}` : '';
       const context = `[${sheetName}${sectionLabel}] ${parts.join(' | ')}`.slice(0, 400);
 
@@ -241,16 +305,23 @@ export async function extractFromWorkbook(
         const cell = row.getCell(colNum);
         const type = colSchema.type!;
 
-        if (type === 'cost') {
+        // Handle all monetary types: cost, budget, actual, variance, outstanding, contract_value
+        if (type === 'cost' || type === 'budget' || type === 'actual' || type === 'variance' ||
+            type === 'budgeted_cost' || type === 'actual_cost' || type === 'committed_cost' || type === 'variance_cost' ||
+            type === 'outstanding' || type === 'contract_value') {
           const num = getCellNumber(cell);
-          if (num && num > 0) {
+          // For variance and outstanding, allow negative values; for others, only positive
+          const isValid = type === 'variance' || type === 'variance_cost' || type === 'outstanding'
+            ? num !== undefined && num !== 0
+            : num && num > 0;
+          if (isValid) {
             results.push({
-              id: uuidv4(), documentId, type: 'cost',
+              id: uuidv4(), documentId, type,
               label:        rowLabel,
               rawValue:     getCellText(cell) || String(num),
               numericValue: num,
               unit:         colSchema.unit?.toUpperCase() ?? activeCurrency,
-              context, sheetName, sectionTitle: currentSection || undefined, rowNumber: rowNum,
+              context, sheetName, sectionTitle: rowSectionTitle, rowNumber: rowNum,
             });
           }
 
@@ -262,7 +333,7 @@ export async function extractFromWorkbook(
               label:    `${colSchema.header}: ${rowLabel}`,
               rawValue: d.toLocaleDateString('en-GB'),
               dateValue: d,
-              context, sheetName, sectionTitle: currentSection || undefined, rowNumber: rowNum,
+              context, sheetName, sectionTitle: rowSectionTitle, rowNumber: rowNum,
             });
           }
 
@@ -270,14 +341,19 @@ export async function extractFromWorkbook(
           const num = getCellNumber(cell);
           if (num !== undefined) {
             const pct = isPercentFormat(cell) ? num * 100 : num;
-            if (pct > 0 && pct <= 100) {
+            // Allow negative percentages for variance columns; otherwise expect 0-100 range
+            const isVarianceCol = colSchema.header.toLowerCase().includes('variance');
+            const isValid = isVarianceCol
+              ? pct >= -100 && pct <= 100
+              : pct > 0 && pct <= 100;
+            if (isValid) {
               results.push({
                 id: uuidv4(), documentId, type: 'percentage',
                 label:        `${colSchema.header}: ${rowLabel}`,
                 rawValue:     getCellText(cell) || `${pct}%`,
                 numericValue: pct,
                 unit:         '%',
-                context, sheetName, sectionTitle: currentSection || undefined, rowNumber: rowNum,
+                context, sheetName, sectionTitle: rowSectionTitle, rowNumber: rowNum,
               });
             }
           }
@@ -291,7 +367,7 @@ export async function extractFromWorkbook(
               rawValue:     getCellText(cell) || String(num),
               numericValue: num,
               unit:         colSchema.unit ?? undefined,
-              context, sheetName, sectionTitle: currentSection || undefined, rowNumber: rowNum,
+              context, sheetName, sectionTitle: rowSectionTitle, rowNumber: rowNum,
             });
           }
 
@@ -302,7 +378,7 @@ export async function extractFromWorkbook(
               id: uuidv4(), documentId, type: 'party',
               label:    colSchema.header,
               rawValue: text,
-              context, sheetName, sectionTitle: currentSection || undefined, rowNumber: rowNum,
+              context, sheetName, sectionTitle: rowSectionTitle, rowNumber: rowNum,
             });
           }
 
@@ -313,7 +389,7 @@ export async function extractFromWorkbook(
               id: uuidv4(), documentId, type: 'reference',
               label:    `${colSchema.header}: ${rowLabel}`,
               rawValue: text,
-              context, sheetName, sectionTitle: currentSection || undefined, rowNumber: rowNum,
+              context, sheetName, sectionTitle: rowSectionTitle, rowNumber: rowNum,
             });
           }
 
@@ -327,7 +403,7 @@ export async function extractFromWorkbook(
               rawValue:     text || String(num),
               numericValue: num,
               unit:         colSchema.unit ?? undefined,
-              context, sheetName, sectionTitle: currentSection || undefined, rowNumber: rowNum,
+              context, sheetName, sectionTitle: rowSectionTitle, rowNumber: rowNum,
             });
           }
 
@@ -345,7 +421,7 @@ export async function extractFromWorkbook(
               rawValue,
               numericValue: num,
               unit:         colSchema.unit ?? undefined,
-              context, sheetName, sectionTitle: currentSection || undefined, rowNumber: rowNum,
+              context, sheetName, sectionTitle: rowSectionTitle, rowNumber: rowNum,
             });
           }
         }
@@ -362,7 +438,7 @@ export async function extractFromWorkbook(
             rawValue:     String(rate * qty),
             numericValue: rate * qty,
             unit:         activeCurrency,
-            context, sheetName, sectionTitle: currentSection || undefined, rowNumber: rowNum,
+            context, sheetName, sectionTitle: rowSectionTitle, rowNumber: rowNum,
           });
         }
       }

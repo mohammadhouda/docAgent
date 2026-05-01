@@ -69,7 +69,8 @@ export const toolDefinitions: OpenAI.Chat.ChatCompletionTool[] = [
         '  "key dates and milestones" → types:["date"]\n' +
         '  "who are the parties?" → types:["party"]\n' +
         '  "items above 500k SAR" → types:["cost"], minValue:500000\n' +
-        '  "in-progress activities" → types:["status"], status:"In Progress"\n\n' +
+        '  "in-progress activities" → types:["status"], rawValueFilter:"In Progress"\n' +
+        '  "high likelihood risks" → types:["likelihood"], rawValueFilter:"High"\n\n' +
         'category is matched semantically — "MEP", "mep", "mechanical" all resolve correctly.',
       parameters: {
         type: 'object',
@@ -80,7 +81,7 @@ export const toolDefinitions: OpenAI.Chat.ChatCompletionTool[] = [
           minValue:   { type: 'number', description: 'Minimum numeric value' },
           maxValue:   { type: 'number', description: 'Maximum numeric value' },
           unit:       { type: 'string', description: 'Filter by unit of measure (e.g. "m3", "ton", "m2")' },
-          status:     { type: 'string', description: 'Filter by raw_value text match (e.g. "Completed", "In Progress")' },
+          rawValueFilter: { type: 'string', description: 'Filter by raw_value text match for ANY categorical column — use for status values ("In Progress"), likelihood levels ("High"), ratings ("Low"), or any other enum-style field.' },
           limit:      { type: 'number', description: 'Max rows to return (default 150)' },
           orderBy:    { type: 'string', enum: ['value_desc', 'value_asc', 'date_asc', 'label'], description: 'Sort order (default value_desc)' },
         },
@@ -114,7 +115,7 @@ export const toolDefinitions: OpenAI.Chat.ChatCompletionTool[] = [
           groupBy:               { type: 'string', enum: ['sheet', 'section', 'document', 'category', 'type'], description: 'Dimension to group by' },
           aggregation:           { type: 'string', enum: ['sum', 'count', 'avg', 'max', 'min'], description: 'Aggregation function (default: sum)' },
           category:              { type: 'string', description: 'Trade/section keyword to filter by before aggregating. Matched semantically.' },
-          excludeSummarySheets:  { type: 'boolean', description: 'Exclude sheets named "summary", "rollup", or "consolidated" (default false)' },
+          excludeSummarySheets:  { type: 'boolean', description: 'Exclude roll-up/summary sheets from aggregation to prevent double-counting line items (default true). Pass false only when explicitly querying summary-sheet totals.' },
         },
         required: ['type', 'groupBy'],
       },

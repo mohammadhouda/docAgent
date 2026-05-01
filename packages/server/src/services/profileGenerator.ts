@@ -128,7 +128,7 @@ Return a JSON object:
   "summary": "2 sentences: what this document is and what it contains",
   "language": "ISO 639-1 code, e.g. en / ar / fr",
   "keyCategories": ["up to 8 major sections, trades, or categories present in the document"],
-  "queryHints": ["2 to 5 practical tips for how to query this document — mention specific category keywords, code prefixes, sheet names, or tool choices that will work well"]
+  "queryHints": ["2 to 5 practical tips for how to query this document — mention specific category keywords, code prefixes, sheet names, and what value types or data are available. Focus on WHAT data exists and WHERE to find it, not which tool to call."]
 }`;
 
   try {
@@ -169,52 +169,28 @@ function deriveSuggestedTools(
 ): string[] {
   const tools = new Set<string>();
 
-  if (availableTypes.includes('cost')) {
-    tools.add('calculate_cost_summary');
-    tools.add('extract_cost_items');
-  }
-  if (availableTypes.includes('quantity')) {
-    tools.add('extract_quantities');
-    tools.add('calculate_unit_rate');
-  }
-  if (availableTypes.includes('date')) {
-    tools.add('extract_dates_deliverables');
-  }
-  if (availableTypes.includes('party')) {
-    tools.add('extract_parties');
-  }
-  if (availableTypes.includes('percentage')) {
-    tools.add('extract_percentages');
+  // query_values fits any document that has structured extracted values
+  if (availableTypes.length > 0) tools.add('query_values');
+
+  // aggregate_values is relevant when there is numeric data worth summing/averaging
+  if (availableTypes.some((t) => ['cost', 'quantity', 'budget', 'actual'].includes(t))) {
+    tools.add('aggregate_values');
   }
 
-  switch (documentType) {
-    case 'boq':
-      tools.add('calculate_cost_summary');
-      tools.add('extract_cost_items');
-      tools.add('calculate_percentage_of_total');
-      tools.add('compare_costs');
-      break;
-    case 'programme':
-      tools.add('query_schedule_by_status');
-      tools.add('extract_dates_deliverables');
-      break;
-    case 'contract':
-      tools.add('extract_parties');
-      tools.add('extract_percentages');
-      tools.add('search_documents');
-      break;
-    case 'cost-report':
-      tools.add('query_budget_variance');
-      tools.add('calculate_cost_summary');
-      break;
-    case 'specification':
-    case 'other':
-      tools.add('search_documents');
-      tools.add('summarize_document');
-      break;
+  // search_documents is useful for narrative content (contracts, specs, meeting minutes)
+  if (['contract', 'specification', 'other'].includes(documentType)) {
+    tools.add('search_documents');
   }
 
-  return Array.from(tools).slice(0, 6);
+  // compute_result for documents that typically need arithmetic post-processing
+  if (['boq', 'cost-report'].includes(documentType)) {
+    tools.add('compute_result');
+  }
+
+  // Always include get_document_info as a fallback for structure discovery
+  tools.add('get_document_info');
+
+  return Array.from(tools).slice(0, 5);
 }
 
 // ─── Public entry point ───────────────────────────────────────────────────────

@@ -78,7 +78,11 @@ Also call this before filtering by category when you don't know the keyword.
 → \`query_values(types:["date"], documentId)\`
 
 **"Which tasks are in progress / completed / not started?"**
-→ \`query_values(types:["status"], status:"In Progress", documentId)\`
+→ \`query_values(types:["status"], rawValueFilter:"In Progress", documentId)\`
+
+**"High / medium / low likelihood risks?" / "Risks rated [level]?" / "Items where [column] = [value]"**
+→ \`query_values(types:["likelihood"], rawValueFilter:"High", documentId)\`
+  Use rawValueFilter whenever the question filters by a categorical value — not just for status columns.
 
 **"Budget vs actual?" / "Which categories are over budget?"**
 → \`aggregate_values(type:"budget", groupBy:"section", documentId)\` AND

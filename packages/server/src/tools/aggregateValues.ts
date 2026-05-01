@@ -13,6 +13,31 @@ interface AggRow {
 type GroupBy      = 'sheet' | 'section' | 'document' | 'category' | 'type';
 type Aggregation  = 'sum' | 'count' | 'avg' | 'max' | 'min';
 
+// Type aliases for budget tracking — allows querying "budget" to match "budgeted_cost", etc.
+const TYPE_ALIASES: Record<string, string[]> = {
+  'budget': ['budget', 'budgeted_cost', 'contract_value'],
+  'actual': ['actual', 'actual_cost'],
+  'committed': ['committed', 'committed_cost'],
+  'variance': ['variance', 'variance_cost'],
+  'outstanding': ['outstanding'],
+};
+
+/**
+ * Expand a type to include its aliases for SQL matching.
+ * Returns the base type if no aliases exist.
+ */
+function expandType(type: string): string[] {
+  return TYPE_ALIASES[type] ?? [type];
+}
+
+/**
+ * Build SQL fragment to match type with aliases.
+ * Usage: WHERE ${typeMatchSQL('$1')}
+ */
+function typeMatchSQL(typeParam: string): string {
+  return `ev.type = ${typeParam}::text`;
+}
+
 /**
  * Generic aggregation over extracted values.
  *
@@ -40,16 +65,25 @@ export async function aggregateValues(args: {
     groupBy,
     aggregation = 'sum',
     category,
-    excludeSummarySheets = false,
+    excludeSummarySheets = true,
   } = args;
 
   const patterns = await resolveCategory(category, documentId);
+
+  // Expand type to include aliases (e.g., 'actual' → ['actual', 'actual_cost'])
+  const typeAliases = expandType(type);
+  const typeCondition = typeAliases.length > 1
+    ? `ev.type = ANY($1::text[])`
+    : `ev.type = $1::text`;
+  const typeParam = typeAliases.length === 1 ? typeAliases[0] : typeAliases;
 
   // Build GROUP BY expression
   const groupExpr =
     groupBy === 'section'  ? `COALESCE(ev.section_title, ev.sheet_name, d.file_name)` :
     groupBy === 'document' ? `d.file_name` :
-    groupBy === 'category' ? `UPPER(REGEXP_REPLACE(ev.label, '^([A-Za-z]+)[-.].*', '\\1'))` :
+    // For 'category': use section_title if populated (explicit category column in Excel),
+    // otherwise fall back to extracting code prefix from label (MEP, CIV, etc.)
+    groupBy === 'category' ? `COALESCE(ev.section_title, UPPER(REGEXP_REPLACE(ev.label, '^([A-Za-z]+)[-.].*', '\\1')))` :
     groupBy === 'type'     ? `ev.type` :
     /* sheet */               `COALESCE(ev.sheet_name, d.file_name)`;
 
@@ -74,14 +108,14 @@ export async function aggregateValues(args: {
        MAX(ev.unit)      AS currency
      FROM extracted_values ev
      JOIN documents d ON ev.document_id = d.id
-     WHERE ev.type = $1
+     WHERE ${typeCondition}
        AND ev.numeric_value IS NOT NULL
        AND ($2::uuid IS NULL OR ev.document_id = $2::uuid)
        AND ($3::text[] IS NULL OR (${categoryMatchSQL('$3')}))
        ${summaryExclusion}
      GROUP BY group_key, d.file_name
      ORDER BY result DESC NULLS LAST`,
-    [type, documentId ?? null, patterns],
+    [typeParam, documentId ?? null, patterns],
   );
 
   // Fallback: if category filter returned nothing, re-run without it so agent sees what IS available
@@ -95,13 +129,13 @@ export async function aggregateValues(args: {
          MAX(ev.unit)  AS currency
        FROM extracted_values ev
        JOIN documents d ON ev.document_id = d.id
-       WHERE ev.type = $1
+       WHERE ${typeCondition}
          AND ev.numeric_value IS NOT NULL
          AND ($2::uuid IS NULL OR ev.document_id = $2::uuid)
          ${summaryExclusion}
        GROUP BY group_key, d.file_name
        ORDER BY result DESC NULLS LAST`,
-      [type, documentId ?? null],
+      [typeParam, documentId ?? null],
     );
     if (fallback.rows.length > 0) {
       const currency = fallback.rows[0].currency ?? 'SAR';

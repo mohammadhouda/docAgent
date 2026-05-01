@@ -34,7 +34,7 @@ export async function queryValues(args: {
   minValue?:   number;
   maxValue?:   number;
   unit?:       string;
-  status?:     string;  // filters on raw_value for status-type fields
+  rawValueFilter?: string;  // filters on raw_value for any categorical column (High, Medium, In Progress, …)
   limit?:      number;
   orderBy?:    'value_desc' | 'value_asc' | 'date_asc' | 'label';
 }): Promise<ToolResult> {
@@ -45,7 +45,7 @@ export async function queryValues(args: {
     minValue,
     maxValue,
     unit,
-    status,
+    rawValueFilter,
     limit = 150,
     orderBy = 'value_desc',
   } = args;
@@ -85,7 +85,7 @@ export async function queryValues(args: {
       minValue   ?? null,
       maxValue   ?? null,
       unit       ? `%${unit}%` : null,
-      status     ? `%${status}%` : null,
+      rawValueFilter ? `%${rawValueFilter}%` : null,
       patterns,
       limit,
     ],

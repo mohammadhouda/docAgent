@@ -24,9 +24,13 @@ Each item must follow this exact shape:
 }
 
 STANDARD TYPES — use these when they fit:
-- cost: any monetary amount — numericValue is the full number (e.g. 1500000, not "1.5M")
+- cost: the primary lump-sum contract price, BOQ line-item cost, or main budget total — numericValue is the full number (e.g. 1500000, not "1.5M"). Do NOT use this for advance payments, bonds, insurance limits, or LD amounts — use the specific types below instead.
+- advance_payment: mobilisation advance or advance payment amounts (e.g. "10% advance of SAR 48,750,000")
+- performance_bond: performance security, guarantee bond, or retention bond amounts
+- insurance_limit: insurance coverage limits (professional indemnity, CAR, public liability, etc.)
+- delay_damages: liquidated damages — daily rates, caps, or total LD amounts
 - date: any calendar date, deadline, or milestone — dateValue in YYYY-MM-DD is required
-- percentage: VAT, retention, margin, completion rate — numericValue is the whole number (15, not 0.15)
+- percentage: VAT, retention rate, advance rate, margin, completion rate — numericValue is the whole number (15, not 0.15)
 - duration: time period like "12 months", "365 days" — numericValue is the number, unit is time unit
 - quantity: measured amount with unit like "500 m²" — numericValue is the number
 - party: company name, contractor, client, consultant — no numericValue
