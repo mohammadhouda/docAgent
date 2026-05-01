@@ -13,7 +13,7 @@ Upload BOQs, contracts, specs, and schedules — then ask natural language quest
 - [Docker Setup](#docker-setup-recommended)
 - [API Reference](#api-reference)
 - [Document Processing](#document-processing-pipeline)
-- [Available Tools](#available-tools-16-total)
+- [Available Tools](#available-tools-5-total)
 
 ---
 
@@ -24,10 +24,11 @@ Upload BOQs, contracts, specs, and schedules — then ask natural language quest
 | **Multi-format Support** | PDF, Excel (`.xlsx`, `.xls`), CSV — parsed with format-specific extractors |
 | **Semantic Search** | pgvector + OpenAI embeddings find meaning, not just keywords |
 | **Structured Extraction** | Costs, quantities, dates, parties, percentages auto-extracted to SQL tables |
-| **16 Specialized Tools** | Agent chooses the right tool for each question type |
+| **5 Specialized Tools** | Agent chooses the right tool for each question type |
 | **Cited Responses** | Every fact links back to source document + location |
 | **Async Processing** | BullMQ + Redis queues handle uploads and questions in background |
 | **Structured Answers** | JSON responses render as tables, timelines, fact grids, party cards |
+| **Document Profiling** | AI-generated metadata, query hints, and tool suggestions per document |
 
 ---
 
@@ -172,10 +173,10 @@ Returns: `{ jobs: [{ id, fileName }] }` — poll at `/api/upload/jobs/:id`
 
 ## Document Processing Pipeline
 
-Every file goes through **6 stages**:
+Every file goes through **7 stages**:
 
 ```
-Upload → Parse → Chunk → Embed → Extract → Store
+Upload → Parse → Chunk → Embed → Classify → Extract → Store
 ```
 
 | Stage | PDF | Excel/CSV |
@@ -183,9 +184,29 @@ Upload → Parse → Chunk → Embed → Extract → Store
 | **Parse** | `pdf-parse` (max 50 pages, coordinate-based line reconstruction) | `exceljs` (section detection, auto-groups by headers) |
 | **Chunk** | Token-bounded (~800 text, ~500 tables), 75-token smart overlap | Same token-bounded approach, section-aware |
 | **Embed** | `text-embedding-3-small` → 1,536-dim vectors (batches of 100) | Same |
-| **Classify** | `gpt-4o-mini` reads first 2 chunks → document type, project, currency, parties | Same |
+| **Classify** | `gpt-4o-mini` reads first 2 chunks → document type, project, currency, parties, summary | Same |
+| **Profile** | `gpt-5.4-mini` generates structured profile with query hints and tool suggestions | Same |
 | **Extract** | `gpt-5.4-mini` per page (5 concurrent) → costs, dates, quantities, parties, percentages | `gpt-5.4-mini` schema inference → column role classification |
 | **Store** | PostgreSQL via Drizzle ORM (`documents`, `chunks`, `extracted_values`) | Same |
+
+### Document Profile
+
+Each document gets an AI-generated profile stored in the `profile` JSONB column:
+
+```typescript
+interface DocumentProfile {
+  documentType:        "boq" | "programme" | "contract" | "cost-report" | "risk-register" | "specification" | "procurement" | "other";
+  summary:             string;
+  language:            string;  // ISO 639-1
+  currency:            string;  // SAR, USD, AED...
+  keyCategories:       string[];  // up to 8 major sections/trades
+  availableValueTypes: string[];  // cost, date, quantity, party, percentage...
+  totalCost?:          number;
+  sheets?:             SheetProfile[];  // per-sheet breakdown
+  suggestedTools:      string[];  // top 5 tools for this document
+  queryHints:          string[];  // practical tips for querying
+}
+```
 
 ### Type Normalization
 
@@ -231,28 +252,36 @@ Frontend renders as typed cards
 
 ---
 
-## Available Tools (16 Total)
+## Available Tools (5 Total)
+
+The system uses **5 core tools** that cover all question types through flexible parameters:
 
 | Tool | Answers Questions Like |
 |---|---|
-| `list_documents` | "What files do you have?" / "What documents are loaded?" |
-| `get_document_sections` | "What sections/trades are in this BOQ?" / "What sheets does this file have?" |
+| `get_document_info` | "What files do you have?" / "What sections are in this BOQ?" / "Summarize this document" |
 | `search_documents` | General content, clauses, narrative, specs (semantic search via pgvector) |
-| `extract_cost_items` | "What are the most expensive items?" / "List all MEP line items" |
-| `calculate_cost_summary` | "What is the total cost?" / "Break down cost by trade" |
-| `compare_costs` | "Which bid is cheaper?" / "Show costs side by side" |
-| `calculate_cost_variance` | "How much more expensive is A than B?" / "What is the cost difference?" |
-| `calculate_percentage_of_total` | "What share of the budget is MEP?" / "What percentage is civil works?" |
-| `apply_percentage` | "What is the VAT-inclusive total?" / "Apply 5% retention" |
-| `calculate_unit_rate` | "What is the rate per m³ for piling?" / "Cost per m²?" |
-| `compute_difference` | "What is the difference between X and Y?" / "By how much?" |
-| `extract_dates_deliverables` | "What are the key dates?" / "When is the submission deadline?" |
-| `extract_quantities` | "What is the total concrete volume?" / "How many elevators?" |
-| `extract_parties` | "Who is the main contractor?" / "List all subcontractors" |
-| `extract_percentages` | "What is the VAT rate?" / "What retention applies?" |
-| `summarize_document` | "Summarize this document" / "What is the scope of work?" |
-| `aggregate_values` | "Total budget vs actual" / "Which categories are over budget?" |
-| `query_values` | "List all items above 500k SAR" / "Show in-progress tasks" |
+| `query_values` | "List all MEP line items" / "What quantities of concrete?" / "Who are the parties?" / "Items above 500k SAR" |
+| `aggregate_values` | "Total MEP budget" / "Cost breakdown by trade" / "Budget vs actual" / "Which category costs most?" |
+| `compute_result` | "What is the difference?" / "What percentage is MEP?" / "VAT-inclusive total" / "Rate per m³" |
+
+### Tool Parameters
+
+**`query_values`** supports:
+- `types` — cost, quantity, date, percentage, party, status, duration, reference
+- `category` — trade/section filter (semantic matching)
+- `minValue` / `maxValue` — numeric range
+- `unit` — filter by unit (m³, ton, m²)
+- `rawValueFilter` — filter categorical fields (e.g., "In Progress", "High")
+- `orderBy` — value_desc, value_asc, date_asc, label
+
+**`aggregate_values`** supports:
+- `type` — budget, actual, cost, outstanding, variance, quantity
+- `groupBy` — sheet, section, document, category, type
+- `aggregation` — sum, count, avg, max, min
+- `category` — trade/section filter
+
+**`compute_result`** supports:
+- `operation` — sum, difference, ratio, apply_rate, unit_rate
 
 ### Semantic Category Matching
 
@@ -359,8 +388,8 @@ doc-agent/
 │   │   │   ├── extractors/  # PDF + Excel structured extraction
 │   │   │   ├── parsers/     # PDF + Excel text parsing
 │   │   │   ├── routes/      # API endpoints
-│   │   │   ├── services/    # OpenAI, embeddings, metadata, queues
-│   │   │   ├── tools/       # 16 agent tools (SQL queries)
+│   │   │   ├── services/    # AI, embeddings, metadata, queues, profile generation
+│   │   │   ├── tools/       # 5 agent tools (SQL queries)
 │   │   │   ├── utils/       # Chunking, validators, error handling
 │   │   │   └── index.ts     # Server entry point
 │   │   └── test-docs/       # Sample BOQs, schedules, vendor registers
@@ -388,7 +417,7 @@ doc-agent/
 |---|---|
 | **Backend** | Express, TypeScript, Node.js 18 |
 | **Frontend** | Next.js 14 (App Router), React 18, Tailwind CSS |
-| **AI** | OpenAI (`gpt-5.4-mini` extraction, `gpt-4o-mini` agent, `text-embedding-3-small`) |
+| **AI** | OpenAI (`gpt-5.4-mini` extraction & profiling, `gpt-4o-mini` agent, `text-embedding-3-small`) |
 | **Database** | PostgreSQL 14+ with `pgvector` (HNSW index), Drizzle ORM |
 | **Queue** | BullMQ + Redis |
 | **Parsing** | `pdf-parse` (coordinate-based), `exceljs` (section-aware) |
@@ -427,7 +456,7 @@ npm run start   # Starts both servers
 
 Tables auto-create on startup. Schema defined in `packages/server/src/db/schema.ts`:
 
-- `documents` — file metadata, classification, currency, parties
+- `documents` — file metadata, classification, **`profile` JSONB column**, currency, parties
 - `chunks` — text segments + embeddings (pgvector, HNSW index)
 - `extracted_values` — structured extractions (costs, dates, quantities, parties, percentages, outstanding, contract values)
 - `conversations` — chat sessions

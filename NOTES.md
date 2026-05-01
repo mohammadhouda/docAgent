@@ -36,10 +36,55 @@ The workflow combined engineering judgment with AI-assisted execution to move fa
 | 12 | **Budget vs Actual tracking** — type normalization for budget/actual/variance columns, over-budget detection |
 | 13 | **Vendor outstanding tracking** — outstanding type, contract_value type, type aliases in aggregateValues |
 | 14 | **Category aggregation fix** — LLM prompt for category columns, section_title population from Excel Category column |
+| 15 | **Tool consolidation (16 → 5)** — replaced 16 specialized tools with 5 flexible parameterized tools |
+| 16 | **Document profiling** — AI-generated profiles with query hints and tool suggestions stored in JSONB column |
 
 ---
 
 ## Key Design Decisions
+
+### 5 Flexible Tools Over 16 Specialized
+
+The original 16 tools were consolidated into 5 parameterized tools:
+
+| Before (16 tools) | After (5 tools) |
+|---|---|
+| `list_documents`, `get_document_sections`, `summarize_document` | `get_document_info` (3 modes) |
+| `extract_cost_items`, `extract_dates_deliverables`, `extract_quantities`, `extract_parties`, `extract_percentages` | `query_values` (types parameter) |
+| `calculate_cost_summary`, `compare_costs`, `calculate_cost_variance`, `calculate_percentage_of_total`, `calculate_unit_rate` | `aggregate_values` + `compute_result` |
+| `compute_difference`, `apply_percentage` | `compute_result` (operations) |
+| `search_documents` | `search_documents` (unchanged) |
+
+**Benefits:**
+- Simpler agent loop — fewer tool choices to consider
+- Easier to maintain — 5 tool implementations vs 16
+- More flexible — new query types via parameters, not new tools
+- Cleaner system prompt — less routing logic
+
+### Document Profiles (JSONB Column)
+
+Each document gets an AI-generated profile stored in `documents.profile` (JSONB):
+
+```typescript
+interface DocumentProfile {
+  documentType:        "boq" | "programme" | "contract" | "cost-report" | "risk-register" | "specification" | "procurement" | "other";
+  summary:             string;
+  language:            string;
+  currency:            string;
+  keyCategories:       string[];
+  availableValueTypes: string[];
+  totalCost?:          number;
+  sheets?:             SheetProfile[];
+  suggestedTools:      string[];
+  queryHints:          string[];
+}
+```
+
+**Why:**
+- Agent has context about each document before querying
+- Query hints guide category keywords and sheet names
+- Suggested tools help agent choose right approach
+- Generated once during ingestion, reused for every query
 
 ### Function Calling Over Prompt Stuffing
 
@@ -181,6 +226,14 @@ Excel extractor now recognizes "Category", "Trade", "Section" columns and popula
 
 **Fix:** Allow negative percentages for variance columns.
 
+### 5. Tool Proliferation (Phase 15)
+
+**Problem:** 16 specialized tools made agent loop complex and hard to maintain.
+
+**Root Cause:** Each new question type required a new tool.
+
+**Fix:** Consolidated into 5 parameterized tools (`get_document_info`, `search_documents`, `query_values`, `aggregate_values`, `compute_result`).
+
 ---
 
 ## What I Would Improve Given More Time
@@ -229,23 +282,31 @@ Excel extractor now recognizes "Category", "Trade", "Section" columns and popula
 
 ## Lessons Learned
 
-### 1. Type Normalization is Critical
+### 1. Fewer Tools Are Better
+
+5 flexible tools with parameters are easier to maintain than 16 specialized tools. The agent makes better decisions with fewer choices.
+
+### 2. Document Profiles Add Value
+
+AI-generated query hints and tool suggestions per document help the agent make better decisions without additional AI calls at query time.
+
+### 3. Type Normalization is Critical
 
 LLM schema inference is inconsistent. Header keyword matching is more reliable for monetary columns.
 
-### 2. Section Detection Matters
+### 4. Section Detection Matters
 
 Excel files often have category columns. Recognizing them enables accurate `groupBy: 'category'` queries.
 
-### 3. Type Aliases Reduce Friction
+### 5. Type Aliases Reduce Friction
 
 Users query for "budget" and "actual". The system should match `contract_value`, `budgeted_cost`, etc. transparently.
 
-### 4. Async Queues Prevent Timeouts
+### 6. Async Queues Prevent Timeouts
 
 Long-running operations (PDF extraction, multi-tool questions) must run in background with polling.
 
-### 5. Structured Output Enables Better UX
+### 7. Structured Output Enables Better UX
 
 Typed JSON responses let the frontend render tables, timelines, and fact grids without parsing markdown.
 
@@ -258,13 +319,17 @@ Typed JSON responses let the frontend render tables, timelines, and fact grids w
 - `packages/server/src/extractors/pdfExtractor.ts` — per-page LLM extraction
 
 ### Tools
+- `packages/server/src/tools/index.ts` — consolidated 5 tools
 - `packages/server/src/tools/aggregateValues.ts` — type aliases, category grouping
 - `packages/server/src/tools/queryValues.ts` — category filter, type filtering
+- `packages/server/src/tools/computeResult.ts` — all arithmetic operations
+- `packages/server/src/tools/getDocumentInfo.ts` — list/sections/summarize modes
 - `packages/server/src/tools/utils.ts` — semantic category resolution
 
-### Agent
-- `packages/server/src/services/agent.ts` — tool loop, document context
-- `packages/server/src/services/openai.ts` — system prompt, tool routing rules
+### Services
+- `packages/server/src/services/agent.ts` — tool loop, document context from profiles
+- `packages/server/src/services/openai.ts` — system prompt with 5 tool routing
+- `packages/server/src/services/profileGenerator.ts` — AI document profiling with query hints
 
 ### Frontend
 - `packages/web/src/components/StructuredAnswer.tsx` — section renderer
@@ -278,7 +343,7 @@ Typed JSON responses let the frontend render tables, timelines, and fact grids w
 |---|---|
 | **Backend** | Node.js 18, Express, TypeScript |
 | **Frontend** | Next.js 14 (App Router), React 18, Tailwind CSS |
-| **AI** | OpenAI (`gpt-5.4-mini`, `gpt-4o-mini`, `text-embedding-3-small`) |
+| **AI** | OpenAI (`gpt-5.4-mini` extraction & profiling, `gpt-4o-mini` agent, `text-embedding-3-small`) |
 | **Database** | PostgreSQL 14+ with `pgvector`, Drizzle ORM |
 | **Queue** | BullMQ + Redis |
 | **Parsing** | `pdf-parse`, `exceljs` |
@@ -290,30 +355,30 @@ Typed JSON responses let the frontend render tables, timelines, and fact grids w
 ```
 doc-agent/
 ├── packages/
-│   ├── server/          # Backend
+│   ├── server/              # Backend
 │   │   ├── src/
-│   │   │   ├── db/      # Drizzle schema
+│   │   │   ├── db/          # Drizzle schema (documents.profile JSONB)
 │   │   │   ├── extractors/  # PDF + Excel extraction
 │   │   │   ├── parsers/     # PDF + Excel parsing
 │   │   │   ├── routes/      # API endpoints
-│   │   │   ├── services/    # AI, embeddings, queues
-│   │   │   ├── tools/       # 16 agent tools
+│   │   │   ├── services/    # AI, embeddings, queues, profiling
+│   │   │   ├── tools/       # 5 agent tools
 │   │   │   └── utils/       # Chunking, validators
-│   │   └── test-docs/   # Sample BOQs, schedules, vendor registers
+│   │   └── test-docs/       # Sample BOQs, schedules, vendor registers
 │   │
-│   └── web/             # Frontend
+│   └── web/                 # Frontend
 │       ├── src/
-│       │   ├── app/     # Next.js pages
+│       │   ├── app/         # Next.js pages
 │       │   ├── components/  # UI components
-│       │   └── lib/     # API client
+│       │   └── lib/         # API client
 │       └── .env.local
 │
-├── docker-compose.yml   # PostgreSQL + Redis
-├── .env.example         # Environment template
-├── README.md            # User documentation
-├── HOW_IT_WORKS.md      # System architecture
-├── NOTES.md             # This file
-└── CLAUDE.md            # Claude Code context
+├── docker-compose.yml       # PostgreSQL + Redis
+├── .env.example             # Environment template
+├── README.md                # User documentation
+├── HOW_IT_WORKS.md          # System architecture
+├── NOTES.md                 # This file
+└── CLAUDE.md                # Claude Code context
 ```
 
 ---

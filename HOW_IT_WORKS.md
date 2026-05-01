@@ -11,10 +11,10 @@ Both run asynchronously via BullMQ + Redis, keeping the UI responsive while back
 
 ## 1. Document Ingestion Pipeline
 
-When a file is uploaded, it enters a queue and flows through **6 stages**:
+When a file is uploaded, it enters a queue and flows through **7 stages**:
 
 ```
-Upload → Parse → Chunk → Embed → Extract → Store
+Upload → Parse → Chunk → Embed → Classify → Profile → Extract → Store
 ```
 
 ### Stage 1: Parse Content
@@ -104,13 +104,60 @@ The system finds **meaning**, not just keyword matches.
 | `currency` | "SAR", "USD", "AED" |
 | `parties` | ["Najd Construction", "Al-Faisal Holdings"] |
 | `summary` | "Bill of quantities for Riyadh Tower Phase 1" |
-| `keyCategories` | ["Site Works", "Concrete", "MEP", "Finishes"] |
 
-This metadata powers the `list_documents` and `get_document_sections` tools.
+This metadata is stored in the `meta_*` columns of the `documents` table.
 
 ---
 
-### Stage 5: Structured Extraction
+### Stage 5: Document Profiling
+
+A second AI pass (`gpt-5.4-mini`) generates a structured **profile** stored in the `profile` JSONB column:
+
+```typescript
+interface DocumentProfile {
+  documentType:        "boq" | "programme" | "contract" | "cost-report" | "risk-register" | "specification" | "procurement" | "other";
+  summary:             string;  // 2-sentence description
+  language:            string;  // ISO 639-1 code
+  currency:            string;  // SAR, USD, AED...
+  keyCategories:       string[];  // up to 8 major sections/trades
+  availableValueTypes: string[];  // cost, date, quantity, party, percentage, status...
+  totalCost?:          number;   // sum of all cost values
+  sheets?:             SheetProfile[];  // per-sheet breakdown
+  suggestedTools:      string[];  // top 5 tools for this document
+  queryHints:          string[];  // practical tips for querying
+}
+```
+
+**Sheet Profile:**
+```typescript
+interface SheetProfile {
+  name:               string;
+  role:               "line-items" | "summary";
+  itemCount:          number;
+  costTotal?:         number;
+  currency?:          string;
+  dominantValueTypes: string[];
+}
+```
+
+**Query Hints Example:**
+```
+[
+  "Use category filter 'MEP' or 'mechanical' for HVAC/electrical/plumbing items",
+  "Code prefixes M-, E-, P- indicate MEP trades",
+  "Sheet 'Cost_Tracking' has budget vs actual data with variance columns",
+  "Outstanding values are type 'outstanding', not 'cost'"
+]
+```
+
+**Suggested Tools Example:**
+```
+["query_values", "aggregate_values", "compute_result", "get_document_info", "search_documents"]
+```
+
+---
+
+### Stage 6: Structured Extraction
 
 Beyond text search, the system extracts **specific values** into a structured SQL table.
 
@@ -148,15 +195,15 @@ Beyond text search, the system extracts **specific values** into a structured SQ
 
 ---
 
-### Stage 6: Store in PostgreSQL
+### Stage 7: Store in PostgreSQL
 
 All data is persisted via Drizzle ORM:
 
-| Table | Purpose |
+| Table | Columns |
 |---|---|
-| `documents` | File metadata, classification, currency, parties |
-| `chunks` | Text segments + embeddings (pgvector) |
-| `extracted_values` | Structured numeric/business data |
+| `documents` | `id`, `file_name`, `file_type`, `profile` (JSONB), `meta_type`, `meta_project_name`, `meta_currency`, `meta_parties`, `meta_summary`, `total_pages`, `total_sheets`, `ingested_at` |
+| `chunks` | `id`, `document_id`, `content`, `embedding` (vector), `page_number`, `sheet_name`, `section_title`, `chunk_type`, `row_start`, `row_end` |
+| `extracted_values` | `id`, `document_id`, `type`, `label`, `raw_value`, `numeric_value`, `date_value`, `unit`, `context`, `sheet_name`, `section_title`, `row_number` |
 
 **Cascade deletes:** Deleting a document automatically removes its chunks and extracted values.
 
@@ -185,7 +232,7 @@ Return structured JSON answer
 **Model:** `gpt-4o-mini` with function calling
 
 **Loop:**
-1. System prompt includes loaded document inventory
+1. System prompt includes loaded document inventory (from `profile` column)
 2. Model chooses which tool to call based on question
 3. Tool executes SQL query against PostgreSQL
 4. Result returned to model
@@ -196,25 +243,117 @@ Return structured JSON answer
 
 ---
 
+## The 5 Core Tools
+
+The system uses **5 flexible tools** that cover all question types through parameters:
+
+### 1. `get_document_info`
+
+**Modes:**
+- `list` — all loaded documents with IDs, types, profile summaries
+- `sections` — sheet/section breakdown for a document
+- `summarize` — AI summary of document content
+
+**Example questions:**
+- "What files do you have?"
+- "What sections are in this BOQ?"
+- "Summarize this contract"
+
+---
+
+### 2. `search_documents`
+
+Semantic search via pgvector cosine similarity.
+
+**Example questions:**
+- "What are the payment terms?"
+- "Show me scope of work clauses"
+- "What does the spec say about concrete strength?"
+
+---
+
+### 3. `query_values`
+
+Retrieve filtered extracted values.
+
+**Parameters:**
+- `types` — cost, quantity, date, percentage, party, status, duration, reference, outstanding, budget, actual, variance
+- `category` — trade/section filter (semantic matching)
+- `minValue` / `maxValue` — numeric range
+- `unit` — filter by unit (m³, ton, m²)
+- `rawValueFilter` — filter categorical fields (e.g., "In Progress", "High")
+- `orderBy` — value_desc, value_asc, date_asc, label
+- `limit` — max rows (default 150)
+
+**Example questions:**
+- "List all MEP line items" → `types: ["cost"], category: "MEP"`
+- "What quantities of concrete?" → `types: ["quantity"], unit: "m3"`
+- "Items above 500k SAR" → `types: ["cost"], minValue: 500000`
+- "In-progress activities" → `types: ["status"], rawValueFilter: "In Progress"`
+- "Total outstanding owed" → `types: ["outstanding"]`
+
+---
+
+### 4. `aggregate_values`
+
+Compute aggregated statistics.
+
+**Parameters:**
+- `type` — budget, actual, cost, outstanding, variance, quantity, percentage
+- `groupBy` — sheet, section, document, category, type
+- `aggregation` — sum, count, avg, max, min
+- `category` — trade/section filter (semantic matching)
+- `excludeSummarySheets` — prevent double-counting (default true)
+
+**Example questions:**
+- "Total MEP budget" → `type: "cost", groupBy: "section", category: "MEP"`
+- "Budget vs actual" → call twice: `type: "budget"` then `type: "actual"`
+- "Which category costs most?" → `type: "cost", groupBy: "category"`
+- "Total outstanding" → `type: "outstanding", groupBy: "document"`
+- "Over budget categories" → compare budget vs actual results
+
+---
+
+### 5. `compute_result`
+
+All arithmetic operations.
+
+**Operations:**
+- `sum` — add array of values
+- `difference` — A minus B with absolute difference and percentage gap
+- `ratio` — what percentage is "part" of "whole"?
+- `apply_rate` — apply percentage (VAT, retention, markup)
+- `unit_rate` — DB lookup: cost ÷ quantity
+
+**Example questions:**
+- "What is the difference?" → `operation: "difference"`
+- "What percentage is MEP?" → `operation: "ratio"`
+- "VAT-inclusive total" → `operation: "apply_rate"`
+- "Rate per m³" → `operation: "unit_rate"`
+
+---
+
 ## Tool Routing Logic
 
 The system prompt routes questions to tools:
 
 | Question Pattern | Tool Chosen |
 |---|---|
-| "What files do you have?" | `list_documents` |
-| "What sections are in this BOQ?" | `get_document_sections` |
-| "Total cost / budget?" | `aggregate_values` or `calculate_cost_summary` |
-| "Budget vs actual?" | `aggregate_values` (type: budget + actual) |
-| "Over budget categories?" | `aggregate_values` (both types) + `compute_difference` |
-| "Compare costs?" | `compare_costs` or `aggregate_values` (groupBy: document) |
-| "Difference between X and Y?" | `aggregate_values` + `compute_difference` |
+| "What files do you have?" | `get_document_info` (mode: list) |
+| "What sections are in this BOQ?" | `get_document_info` (mode: sections) |
+| "Summarize this" | `get_document_info` (mode: summarize) |
+| "Total cost / budget / outstanding?" | `aggregate_values` |
+| "Budget vs actual?" | `aggregate_values` (both types) + `compute_result` (difference) |
+| "Over budget categories?" | `aggregate_values` (budget + actual) + `compute_result` |
+| "Compare costs?" | `aggregate_values` (groupBy: document) |
+| "Difference between X and Y?" | `aggregate_values` + `compute_result` (difference) |
 | "What percentage is MEP?" | `aggregate_values` (category: MEP) + `compute_result` (ratio) |
-| "Key dates / milestones?" | `extract_dates_deliverables` or `query_values` (type: date) |
-| "Who is the contractor?" | `extract_parties` or `query_values` (type: party) |
-| "VAT / retention rate?" | `extract_percentages` or `query_values` (type: percentage) |
+| "Key dates / milestones?" | `query_values` (type: date) |
+| "Who is the contractor?" | `query_values` (type: party) |
+| "VAT / retention rate?" | `query_values` (type: percentage) |
 | "List expensive items?" | `query_values` (type: cost, orderBy: value_desc) |
 | "Outstanding owed to vendors?" | `aggregate_values` (type: outstanding) |
+| "General content search" | `search_documents` |
 
 ---
 
@@ -295,6 +434,8 @@ The frontend (`StructuredAnswer.tsx`) renders each section type:
 
 | Principle | Benefit |
 |---|---|
+| **5 flexible tools** | Simpler agent loop, easier to maintain than 16 specialized tools |
+| **Document profiles** | AI-generated query hints and tool suggestions per document |
 | **Two-pass ingestion** | Chunks for search + extracted values for direct SQL |
 | **Deterministic Excel extraction** | Regex-based classification, zero tokens per row |
 | **Agent uses tools, not arithmetic** | 100% factual, no hallucinated numbers |
@@ -312,8 +453,8 @@ The frontend (`StructuredAnswer.tsx`) renders each section type:
 |---|---|
 | **Backend Runtime** | Node.js 18, Express, TypeScript |
 | **Frontend** | Next.js 14 (App Router), React 18, Tailwind CSS |
-| **AI Models** | OpenAI `gpt-5.4-mini` (extraction), `gpt-4o-mini` (agent), `text-embedding-3-small` |
-| **Database** | PostgreSQL 14+ with `pgvector`, Drizzle ORM |
+| **AI Models** | OpenAI `gpt-5.4-mini` (extraction, profiling), `gpt-4o-mini` (agent), `text-embedding-3-small` |
+| **Database** | PostgreSQL 14+ with `pgvector` (HNSW index), Drizzle ORM |
 | **Job Queue** | BullMQ + Redis |
 | **Parsing** | `pdf-parse`, `exceljs` |
 
@@ -321,4 +462,4 @@ The frontend (`StructuredAnswer.tsx`) renders each section type:
 
 ## In One Sentence
 
-**DocAgent transforms raw construction documents into an intelligent query system that answers business questions with cited, structured responses — powered by AI, grounded in SQL.**
+**DocAgent transforms raw construction documents into an intelligent query system that answers business questions with cited, structured responses — powered by AI, grounded in SQL, with document profiles that guide query strategy.**
