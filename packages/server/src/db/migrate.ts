@@ -91,6 +91,13 @@ export async function runMigrations(): Promise<void> {
     await client.query(`ALTER TABLE chunks ADD COLUMN IF NOT EXISTS chunk_type    TEXT`);
     await client.query(`ALTER TABLE chunks ADD COLUMN IF NOT EXISTS section_title TEXT`);
 
+    // Document profile column — stores LLM-generated profile for dynamic agent context
+    await client.query(`ALTER TABLE documents ADD COLUMN IF NOT EXISTS profile JSONB`);
+
+    // Section title on extracted values — enables section-aware category filtering
+    await client.query(`ALTER TABLE extracted_values ADD COLUMN IF NOT EXISTS section_title TEXT`);
+    await client.query(`CREATE INDEX IF NOT EXISTS ev_section_title ON extracted_values (document_id, section_title)`);
+
     console.log('[DB] Migrations complete');
   } finally {
     client.release();

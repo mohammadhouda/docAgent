@@ -1,7 +1,7 @@
 import { eq, isNotNull } from 'drizzle-orm';
 import { db, pool } from '../db/client.js';
 import { chunks, documents, extractedValues, ChunkRow, DocumentRow } from '../db/schema.js';
-import { Document, DocumentChunk, DocumentMetadata } from '../types/index.js';
+import { Document, DocumentChunk, DocumentMetadata, DocumentProfile, DocumentProfileEntry } from '../types/index.js';
 import { ExtractedValue } from '../extractors/types.js';
 
 // This service manages the storage and retrieval of documents and their associated chunks and extracted values. It provides methods to add new documents, clear the store, retrieve all documents or a specific document by ID, find a document by a selector (ID or filename), check for the existence of embeddings, count the total number of documents, and perform similarity and keyword searches. The service abstracts the database operations related to documents, allowing other parts of the application to interact with it without needing to know the underlying database details.
@@ -113,6 +113,7 @@ function buildSearchResult(r: SearchRow): { chunk: DocumentChunk; document: Docu
     metaCurrency:    r.meta_currency,
     metaParties:     r.meta_parties,
     metaSummary:     r.meta_summary,
+    profile:         null,
   };
 
   // The document's chunks array will be mostly empty except for the matched chunk and its immediate successor (if any). This allows the agent to access the next chunk for additional context without needing a separate query, while keeping memory usage efficient.
@@ -175,9 +176,10 @@ class DocumentStore {
           dateValue:    v.dateValue ?? null,
           unit:         v.unit ?? null,
           context:      v.context,
-          sheetName:    v.sheetName ?? null,
-          pageNumber:   v.pageNumber ?? null,
-          rowNumber:    v.rowNumber ?? null,
+          sheetName:    v.sheetName    ?? null,
+          sectionTitle: v.sectionTitle ?? null,
+          pageNumber:   v.pageNumber   ?? null,
+          rowNumber:    v.rowNumber    ?? null,
         })),
       );
     }
@@ -312,6 +314,24 @@ class DocumentStore {
       [query, maxResults],
     );
     return result.rows.map(buildSearchResult);
+  }
+
+  async updateProfile(documentId: string, profile: DocumentProfile): Promise<void> {
+    await pool.query(
+      'UPDATE documents SET profile = $1 WHERE id = $2',
+      [JSON.stringify(profile), documentId],
+    );
+  }
+
+  async getProfiles(): Promise<DocumentProfileEntry[]> {
+    const result = await pool.query<{ id: string; file_name: string; profile: unknown }>(
+      'SELECT id, file_name, profile FROM documents ORDER BY ingested_at ASC',
+    );
+    return result.rows.map((r) => ({
+      id:       r.id,
+      fileName: r.file_name,
+      profile:  r.profile as DocumentProfile | null,
+    }));
   }
 }
 

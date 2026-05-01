@@ -16,6 +16,7 @@ export interface ExtractedValue {
   unit?: string;
   context: string;
   sheetName?: string;
+  sectionTitle?: string;
   pageNumber?: number;
   rowNumber?: number;
 }

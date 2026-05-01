@@ -4,6 +4,7 @@ import { parseFile } from '../parsers/index.js';
 import { documentStore } from './documentStore.js';
 import { generateEmbeddings } from './embeddings.js';
 import { extractDocumentMetadata } from './metadata.js';
+import { generateDocumentProfile } from './profileGenerator.js';
 import { Document } from '../types/index.js';
 
 export interface IngestedFileResult {
@@ -48,6 +49,16 @@ export async function ingestFile(
 
   // Store extracted values separately for efficient querying, linking them to the document ID
   await documentStore.addExtractedValues(parseResult.extractedValues);
+
+  // Generate and persist document profile — enables dynamic agent context injection.
+  // Runs after extracted values are stored so the profile generator can query them.
+  // Non-fatal: document remains fully usable if profile generation fails.
+  try {
+    const profile = await generateDocumentProfile(documentId, fileName, metadata);
+    await documentStore.updateProfile(documentId, profile);
+  } catch (err) {
+    console.error('[profile] Failed to generate profile for', fileName, err instanceof Error ? err.message : err);
+  }
 
   return {
     name: fileName,

@@ -110,8 +110,10 @@ function isPercentFormat(cell: ExcelJS.Cell): boolean {
 
 // ─── Row-level guard ──────────────────────────────────────────────────────────
 
-// Skip grand-total / sub-total rows — they are aggregates, not line items.
-const TOTAL_ROW_RE = /^\s*(grand\s+)?(sub\s*)?total\b|^\s*vat\b/i;
+// Skip rows whose label IS purely an aggregate keyword ("Grand Total", "Subtotal", "VAT").
+// Rows like "Total MEP Works" or "Civil Works Total" are section subtotals that carry a
+// meaningful category name — they must be kept so tools can return per-trade subtotals.
+const TOTAL_ROW_RE = /^\s*(grand[\s-]+total|sub[\s-]*total|total|vat)\s*[:\-]?\s*$/i;
 
 // ─── Main extractor ───────────────────────────────────────────────────────────
 
@@ -197,6 +199,8 @@ export async function extractFromWorkbook(
       'SAR';
 
     // ── Walk data rows ──────────────────────────────────────────────────────
+    let currentSection = '';
+
     for (let rowNum = headerRowNum + 1; rowNum <= ws.rowCount; rowNum++) {
       const row = ws.getRow(rowNum);
 
@@ -205,10 +209,21 @@ export async function extractFromWorkbook(
       const description = labelCell ? getCellText(labelCell).trim() : '';
       if (!description || TOTAL_ROW_RE.test(description)) continue;
 
+      // A row with a description but no numeric value in any value column is a section header.
+      // Track it as the current section context without emitting any extracted value.
+      const hasNumericValue = valueColumns.some(([colNum]) => {
+        const n = getCellNumber(row.getCell(colNum));
+        return n !== undefined && n !== 0;
+      });
+      if (!hasNumericValue && valueColumns.length > 0) {
+        currentSection = description;
+        continue;
+      }
+
       const itemNo   = itemNoCell ? getCellText(itemNoCell).trim() : '';
       const rowLabel = itemNo ? `${itemNo}: ${description}` : description;
 
-      // Compact context string from all non-empty cells
+      // Compact context string from all non-empty cells, prefixed with sheet+section
       const parts: string[] = [];
       row.eachCell({ includeEmpty: false }, (cell, colNum) => {
         const val = getCellText(cell).trim();
@@ -218,7 +233,8 @@ export async function extractFromWorkbook(
         }
       });
       if (parts.length === 0) continue;
-      const context = `[${sheetName}] ${parts.join(' | ')}`.slice(0, 300);
+      const sectionLabel = currentSection ? ` > ${currentSection}` : '';
+      const context = `[${sheetName}${sectionLabel}] ${parts.join(' | ')}`.slice(0, 400);
 
       // Extract each value column using the LLM-assigned type.
       for (const [colNum, colSchema] of valueColumns) {
@@ -234,7 +250,7 @@ export async function extractFromWorkbook(
               rawValue:     getCellText(cell) || String(num),
               numericValue: num,
               unit:         colSchema.unit?.toUpperCase() ?? activeCurrency,
-              context, sheetName, rowNumber: rowNum,
+              context, sheetName, sectionTitle: currentSection || undefined, rowNumber: rowNum,
             });
           }
 
@@ -246,7 +262,7 @@ export async function extractFromWorkbook(
               label:    `${colSchema.header}: ${rowLabel}`,
               rawValue: d.toLocaleDateString('en-GB'),
               dateValue: d,
-              context, sheetName, rowNumber: rowNum,
+              context, sheetName, sectionTitle: currentSection || undefined, rowNumber: rowNum,
             });
           }
 
@@ -261,7 +277,7 @@ export async function extractFromWorkbook(
                 rawValue:     getCellText(cell) || `${pct}%`,
                 numericValue: pct,
                 unit:         '%',
-                context, sheetName, rowNumber: rowNum,
+                context, sheetName, sectionTitle: currentSection || undefined, rowNumber: rowNum,
               });
             }
           }
@@ -275,7 +291,7 @@ export async function extractFromWorkbook(
               rawValue:     getCellText(cell) || String(num),
               numericValue: num,
               unit:         colSchema.unit ?? undefined,
-              context, sheetName, rowNumber: rowNum,
+              context, sheetName, sectionTitle: currentSection || undefined, rowNumber: rowNum,
             });
           }
 
@@ -286,7 +302,7 @@ export async function extractFromWorkbook(
               id: uuidv4(), documentId, type: 'party',
               label:    colSchema.header,
               rawValue: text,
-              context, sheetName, rowNumber: rowNum,
+              context, sheetName, sectionTitle: currentSection || undefined, rowNumber: rowNum,
             });
           }
 
@@ -297,7 +313,7 @@ export async function extractFromWorkbook(
               id: uuidv4(), documentId, type: 'reference',
               label:    `${colSchema.header}: ${rowLabel}`,
               rawValue: text,
-              context, sheetName, rowNumber: rowNum,
+              context, sheetName, sectionTitle: currentSection || undefined, rowNumber: rowNum,
             });
           }
 
@@ -311,7 +327,7 @@ export async function extractFromWorkbook(
               rawValue:     text || String(num),
               numericValue: num,
               unit:         colSchema.unit ?? undefined,
-              context, sheetName, rowNumber: rowNum,
+              context, sheetName, sectionTitle: currentSection || undefined, rowNumber: rowNum,
             });
           }
 
@@ -329,7 +345,7 @@ export async function extractFromWorkbook(
               rawValue,
               numericValue: num,
               unit:         colSchema.unit ?? undefined,
-              context, sheetName, rowNumber: rowNum,
+              context, sheetName, sectionTitle: currentSection || undefined, rowNumber: rowNum,
             });
           }
         }
@@ -346,7 +362,7 @@ export async function extractFromWorkbook(
             rawValue:     String(rate * qty),
             numericValue: rate * qty,
             unit:         activeCurrency,
-            context, sheetName, rowNumber: rowNum,
+            context, sheetName, sectionTitle: currentSection || undefined, rowNumber: rowNum,
           });
         }
       }

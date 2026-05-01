@@ -4,7 +4,7 @@ import { openaiClient, SYSTEM_PROMPT } from './openai.js';
 import { toolDefinitions, executeTool } from '../tools/index.js';
 import { documentStore } from './documentStore.js';
 import { updateRequestStatus } from './requestStatus.js';
-import { AskResponse, ConversationMessage, SourceReference, StructuredAnswer } from '../types/index.js';
+import { AskResponse, ConversationMessage, DocumentProfileEntry, SourceReference, StructuredAnswer } from '../types/index.js';
 
 const MODEL = 'gpt-5.4-mini';
 
@@ -23,12 +23,63 @@ function parseStructuredAnswer(raw: string): StructuredAnswer {
 
 // This function builds the message array for the OpenAI chat completion API. It includes the system prompt, the conversation history, and the current user question. The conversation history is mapped to the appropriate roles (user or assistant) to maintain context in the dialogue.
 
+function buildDocumentContext(entries: DocumentProfileEntry[]): string {
+  const valid = entries.filter((e) => e.profile != null);
+  if (valid.length === 0) return '';
+
+  const lines: string[] = ['=== LOADED DOCUMENTS ==='];
+
+  valid.forEach((entry, i) => {
+    const p = entry.profile!;
+    const costPart = p.totalCost
+      ? `  |  Total cost: ${p.totalCost.toLocaleString()} ${p.currency}`
+      : '';
+
+    lines.push('');
+    lines.push(`[${i + 1}] ${entry.fileName}`);
+    lines.push(`    Document ID : ${entry.id}`);
+    lines.push(`    Type        : ${p.documentType}  |  Currency: ${p.currency}  |  Language: ${p.language}`);
+    lines.push(`    Summary     : ${p.summary}`);
+
+    if (p.keyCategories.length > 0) {
+      lines.push(`    Categories  : ${p.keyCategories.join(', ')}`);
+    }
+
+    lines.push(`    Data present: ${p.availableValueTypes.join(', ') || 'none'}${costPart}`);
+
+    if (p.sheets && p.sheets.length > 0) {
+      const sheetParts = p.sheets.map((s) => {
+        const cost = s.costTotal
+          ? ` · ${s.costTotal.toLocaleString()} ${s.currency ?? p.currency}`
+          : '';
+        return `"${s.name}" [${s.role}, ${s.itemCount} items${cost}]`;
+      });
+      lines.push(`    Sheets      : ${sheetParts.join(' | ')}`);
+    }
+
+    if (p.queryHints.length > 0) {
+      lines.push(`    Query hints :`);
+      p.queryHints.forEach((h) => lines.push(`      • ${h}`));
+    }
+
+    lines.push(`    Best tools  : ${p.suggestedTools.join(', ')}`);
+  });
+
+  lines.push('');
+  lines.push('IMPORTANT: The inventory above is complete. Do NOT call get_document_info(mode:"list") — Document IDs are already shown above. Use them directly in tool calls.');
+  return lines.join('\n');
+}
+
 function buildMessages(
   question: string,
   history: ConversationMessage[],
+  documentContext: string,
 ): OpenAI.Chat.ChatCompletionMessageParam[] {
+  const systemContent = documentContext
+    ? `${SYSTEM_PROMPT}\n\n${documentContext}`
+    : SYSTEM_PROMPT;
   return [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: systemContent },
     ...history.map((h) => ({ role: h.role as 'user' | 'assistant', content: h.content })),
     { role: 'user', content: question },
   ];
@@ -65,8 +116,10 @@ export async function runAgent(
     };
   }
 
-  const messages       = buildMessages(question, history);
-  const allSources:    SourceReference[] = [];
+  const profileEntries  = await documentStore.getProfiles();
+  const documentContext = buildDocumentContext(profileEntries);
+  const messages        = buildMessages(question, history, documentContext);
+  const allSources:     SourceReference[] = [];
   const toolsUsed      = new Set<string>();
 
   const updateStatus = (status: string) => {

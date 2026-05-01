@@ -18,6 +18,7 @@ export const documents = pgTable('documents', {
   fileName:        text('file_name').notNull(),
   filePath:        text('file_path').notNull(),
   fileType:        text('file_type').notNull(),
+  profile:         jsonb('profile'),
   totalPages:      integer('total_pages'),
   totalSheets:     integer('total_sheets'),
   ingestedAt:      timestamp('ingested_at', { withTimezone: true }).notNull(),
@@ -70,6 +71,7 @@ export const extractedValues = pgTable('extracted_values', {
   unit:         text('unit'),
   context:      text('context').notNull(),
   sheetName:    text('sheet_name'),
+  sectionTitle: text('section_title'),
   pageNumber:   integer('page_number'),
   rowNumber:    integer('row_number'),
 });

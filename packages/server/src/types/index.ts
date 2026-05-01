@@ -6,6 +6,34 @@ export interface DocumentMetadata {
   summary?: string;
 }
 
+export interface SheetProfile {
+  name: string;
+  role: 'line-items' | 'summary' | 'schedule' | 'form' | 'other';
+  itemCount: number;
+  costTotal?: number;
+  currency?: string;
+  dominantValueTypes: string[];
+}
+
+export interface DocumentProfile {
+  documentType: 'boq' | 'programme' | 'contract' | 'cost-report' | 'risk-register' | 'specification' | 'procurement' | 'other';
+  summary: string;
+  currency: string;
+  language: string;
+  keyCategories: string[];
+  availableValueTypes: string[];
+  totalCost?: number;
+  sheets?: SheetProfile[];
+  suggestedTools: string[];
+  queryHints: string[];
+}
+
+export interface DocumentProfileEntry {
+  id: string;
+  fileName: string;
+  profile: DocumentProfile | null;
+}
+
 export type ChunkType = 'text' | 'table' | 'heading';
 
 export interface DocumentChunk {
