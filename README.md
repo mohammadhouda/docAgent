@@ -28,7 +28,7 @@ Upload BOQs, contracts, specs, and schedules — then ask natural language quest
 | **Cited Responses** | Every fact links back to source document + location |
 | **Async Processing** | BullMQ + Redis queues handle uploads and questions in background |
 | **Structured Answers** | JSON responses render as tables, timelines, fact grids, party cards |
-| **Document Profiling** | AI-generated metadata, query hints, and tool suggestions per document |
+| **Unified Document Profile** | Single JSONB column stores all document metadata, query hints, and tool suggestions |
 
 ---
 
@@ -102,7 +102,7 @@ npm run dev
 - **Frontend:** http://localhost:3000
 - **Backend:** http://localhost:3001
 
-> **Note:** Database migrations run automatically on server startup. Tables are created if they don't exist.
+> **Note:** Database tables are created automatically on server startup.
 
 ---
 
@@ -173,10 +173,10 @@ Returns: `{ jobs: [{ id, fileName }] }` — poll at `/api/upload/jobs/:id`
 
 ## Document Processing Pipeline
 
-Every file goes through **7 stages**:
+Every file goes through **6 stages**:
 
 ```
-Upload → Parse → Chunk → Embed → Classify → Extract → Store
+Upload → Parse → Chunk → Embed → Extract → Profile & Store
 ```
 
 | Stage | PDF | Excel/CSV |
@@ -184,29 +184,35 @@ Upload → Parse → Chunk → Embed → Classify → Extract → Store
 | **Parse** | `pdf-parse` (max 50 pages, coordinate-based line reconstruction) | `exceljs` (section detection, auto-groups by headers) |
 | **Chunk** | Token-bounded (~800 text, ~500 tables), 75-token smart overlap | Same token-bounded approach, section-aware |
 | **Embed** | `text-embedding-3-small` → 1,536-dim vectors (batches of 100) | Same |
-| **Classify** | `gpt-4o-mini` reads first 2 chunks → document type, project, currency, parties, summary | Same |
-| **Profile** | `gpt-5.4-mini` generates structured profile with query hints and tool suggestions | Same |
 | **Extract** | `gpt-5.4-mini` per page (5 concurrent) → costs, dates, quantities, parties, percentages | `gpt-5.4-mini` schema inference → column role classification |
-| **Store** | PostgreSQL via Drizzle ORM (`documents`, `chunks`, `extracted_values`) | Same |
+| **Profile & Store** | `gpt-5.4-mini` generates unified profile with query hints + stores in JSONB | Same |
 
-### Document Profile
+### Unified Document Profile
 
-Each document gets an AI-generated profile stored in the `profile` JSONB column:
+Each document gets a **single AI-generated profile** stored in `documents.profile` (JSONB column):
 
 ```typescript
 interface DocumentProfile {
-  documentType:        "boq" | "programme" | "contract" | "cost-report" | "risk-register" | "specification" | "procurement" | "other";
+  documentType:        "boq" | "programme" | "contract" | "cost-report" | "risk-register" | "specification" | "procurement" | "schedule" | "other";
   summary:             string;
   language:            string;  // ISO 639-1
   currency:            string;  // SAR, USD, AED...
+  projectName?:        string;
+  parties?:            string[];
   keyCategories:       string[];  // up to 8 major sections/trades
-  availableValueTypes: string[];  // cost, date, quantity, party, percentage...
+  availableValueTypes: string[];  // cost, date, quantity, party, percentage, status, outstanding, budget, actual, variance
   totalCost?:          number;
   sheets?:             SheetProfile[];  // per-sheet breakdown
   suggestedTools:      string[];  // top 5 tools for this document
   queryHints:          string[];  // practical tips for querying
 }
 ```
+
+**Why a unified profile?**
+- **Single source of truth** — no sync issues between separate metadata columns
+- **Flexible schema** — JSONB lets you add/remove fields without migrations
+- **Query hints** guide the agent to use correct category keywords and sheet names
+- **Suggested tools** help the agent choose the right approach for each document
 
 ### Type Normalization
 
@@ -278,7 +284,7 @@ The system uses **5 core tools** that cover all question types through flexible 
 - `type` — budget, actual, cost, outstanding, variance, quantity
 - `groupBy` — sheet, section, document, category, type
 - `aggregation` — sum, count, avg, max, min
-- `category` — trade/section filter
+- `category` — trade/section filter (semantic matching)
 
 **`compute_result`** supports:
 - `operation` — sum, difference, ratio, apply_rate, unit_rate
@@ -456,7 +462,7 @@ npm run start   # Starts both servers
 
 Tables auto-create on startup. Schema defined in `packages/server/src/db/schema.ts`:
 
-- `documents` — file metadata, classification, **`profile` JSONB column**, currency, parties
+- `documents` — file metadata, **`profile` JSONB column** (unified profile with all metadata, query hints, tool suggestions)
 - `chunks` — text segments + embeddings (pgvector, HNSW index)
 - `extracted_values` — structured extractions (costs, dates, quantities, parties, percentages, outstanding, contract values)
 - `conversations` — chat sessions

@@ -23,7 +23,7 @@ router.get('/', async (_req: Request, res: Response) => {
     totalSheets: doc.totalSheets,
     chunkCount:  doc.chunks.length,
     hasEmbeddings: doc.chunks.some((c) => !!c.embedding),
-    metadata:    doc.metadata,
+    profile:     doc.profile,
     ingestedAt:  doc.ingestedAt,
   }));
 

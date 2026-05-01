@@ -1,6 +1,6 @@
 import { pool } from '../db/client.js';
 import { openaiClient } from './openai.js';
-import { DocumentMetadata, DocumentProfile, SheetProfile } from '../types/index.js';
+import { DocumentProfile, SheetProfile } from '../types/index.js';
 
 // ─── Stats computed purely from the DB (no LLM cost) ─────────────────────────
 
@@ -99,9 +99,9 @@ interface LLMClassification {
 }
 
 async function classifyWithLLM(
-  fileName:  string,
-  metadata:  DocumentMetadata,
-  stats:     DocumentStats,
+  fileName:       string,
+  initialProfile: Partial<DocumentProfile>,
+  stats:          DocumentStats,
 ): Promise<LLMClassification> {
   const sheetLines = stats.sheets.map((s) => {
     const cost = s.costTotal
@@ -113,8 +113,8 @@ async function classifyWithLLM(
   const prompt = `You are classifying a project document to help an AI agent query it correctly.
 
 File name: "${fileName}"
-Preliminary type: "${metadata.type ?? 'unknown'}"
-Preliminary summary: "${metadata.summary ?? 'none'}"
+Preliminary type: "${initialProfile.documentType ?? 'unknown'}"
+Preliminary summary: "${initialProfile.summary ?? 'none'}"
 Value types found: ${stats.availableValueTypes.join(', ') || 'none'}
 Code prefixes in item labels: ${stats.codePrefixes.join(', ') || 'none'}
 Sheets / sections:
@@ -145,15 +145,15 @@ Return a JSON object:
     const raw = JSON.parse(res.choices[0]?.message?.content ?? '{}');
     return {
       documentType:  raw.documentType  ?? 'other',
-      summary:       typeof raw.summary === 'string' ? raw.summary : (metadata.summary ?? ''),
+      summary:       typeof raw.summary === 'string' ? raw.summary : (initialProfile.summary ?? ''),
       language:      typeof raw.language === 'string' ? raw.language : 'en',
       keyCategories: Array.isArray(raw.keyCategories) ? raw.keyCategories.slice(0, 8) : [],
       queryHints:    Array.isArray(raw.queryHints)   ? raw.queryHints.slice(0, 5)    : [],
     };
   } catch {
     return {
-      documentType:  (metadata.type as DocumentProfile['documentType']) ?? 'other',
-      summary:       metadata.summary ?? '',
+      documentType:  (initialProfile.documentType as DocumentProfile['documentType']) ?? 'other',
+      summary:       initialProfile.summary ?? '',
       language:      'en',
       keyCategories: [],
       queryHints:    [],
@@ -196,18 +196,20 @@ function deriveSuggestedTools(
 // ─── Public entry point ───────────────────────────────────────────────────────
 
 export async function generateDocumentProfile(
-  documentId: string,
-  fileName:   string,
-  metadata:   DocumentMetadata,
+  documentId:     string,
+  fileName:       string,
+  initialProfile: Partial<DocumentProfile>,
 ): Promise<DocumentProfile> {
   const stats  = await computeStats(documentId);
-  const llm    = await classifyWithLLM(fileName, metadata, stats);
+  const llm    = await classifyWithLLM(fileName, initialProfile, stats);
 
   return {
     documentType:        llm.documentType,
     summary:             llm.summary,
     language:            llm.language,
-    currency:            stats.currency ?? metadata.currency ?? 'SAR',
+    currency:            stats.currency ?? initialProfile.currency ?? 'SAR',
+    projectName:         initialProfile.projectName,
+    parties:             initialProfile.parties,
     keyCategories:       llm.keyCategories,
     availableValueTypes: stats.availableValueTypes,
     totalCost:           stats.totalCost ?? undefined,

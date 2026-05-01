@@ -1,11 +1,14 @@
 import { openaiClient } from './openai.js';
-import { DocumentMetadata } from '../types/index.js';
+import { DocumentProfile } from '../types/index.js';
 
-// This service is responsible for extracting structured metadata from document excerpts using the OpenAI API. It takes the text of the first few chunks of a document and its filename as input, and returns metadata such as document type, project name, dominant currency, involved parties, and a brief summary. The function handles potential errors gracefully by logging them and returning default metadata values when extraction fails.
-export async function extractDocumentMetadata(
+// Extracts initial document type and summary from first chunks.
+// This is called BEFORE structured extraction, so we only have text content.
+// After extraction completes, generateDocumentProfile() enriches this with
+// stats from the extracted_values table (cost totals, sheet breakdown, value types).
+export async function extractInitialProfile(
   firstChunksText: string,
   fileName: string,
-): Promise<DocumentMetadata> {
+): Promise<Partial<DocumentProfile>> {
   try {
     const excerpt = firstChunksText.slice(0, 4000);
 
@@ -27,11 +30,12 @@ ${excerpt}
 
 Return JSON with exactly these fields:
 {
-  "type": one of "contract" | "boq" | "specification" | "schedule" | "report" | "other",
+  "documentType": one of "contract" | "boq" | "specification" | "schedule" | "report" | "other",
   "projectName": string or null,
   "currency": dominant currency code (e.g. "SAR", "USD") or null,
   "parties": array of organisation/company names mentioned (max 4),
-  "summary": one sentence describing what this document is
+  "summary": one sentence describing what this document is,
+  "language": ISO 639-1 code (e.g. "en", "ar", "fr")
 }`,
         },
       ],
@@ -39,14 +43,15 @@ Return JSON with exactly these fields:
 
     const raw = JSON.parse(response.choices[0].message.content ?? '{}');
     return {
-      type: raw.type ?? 'other',
-      projectName: raw.projectName ?? null,
-      currency: raw.currency ?? null,
+      documentType: raw.documentType ?? 'other',
+      projectName: raw.projectName ?? undefined,
+      currency: raw.currency ?? 'SAR',
       parties: Array.isArray(raw.parties) ? raw.parties.slice(0, 4) : [],
       summary: typeof raw.summary === 'string' ? raw.summary : '',
+      language: typeof raw.language === 'string' ? raw.language : 'en',
     };
   } catch (err) {
-    console.error('[metadata] Failed to extract metadata for', fileName, err instanceof Error ? err.message : err);
-    return { type: 'other', parties: [] };
+    console.error('[profile] Failed to extract initial profile for', fileName, err instanceof Error ? err.message : err);
+    return { documentType: 'other', language: 'en', currency: 'SAR' };
   }
 }

@@ -57,13 +57,13 @@ export async function getDocumentInfo(args: {
       const stats = doc.fileType === 'pdf'
         ? `${doc.totalPages ?? '?'} pages`
         : `${doc.totalSheets ?? '?'} sheets`;
-      const meta = doc.metadata;
+      const p = doc.profile;
       const metaParts = [
-        meta.type        ? `Type: ${meta.type}`                     : '',
-        meta.projectName ? `Project: ${meta.projectName}`           : '',
-        meta.currency    ? `Currency: ${meta.currency}`             : '',
-        meta.parties?.length ? `Parties: ${meta.parties.join(', ')}` : '',
-        meta.summary     ? `Summary: ${meta.summary}`               : '',
+        p?.documentType ? `Type: ${p.documentType}`                 : '',
+        p?.projectName  ? `Project: ${p.projectName}`               : '',
+        p?.currency     ? `Currency: ${p.currency}`                 : '',
+        p?.parties?.length ? `Parties: ${p.parties.join(', ')}`     : '',
+        p?.summary      ? `Summary: ${p.summary}`                   : '',
       ].filter(Boolean).join(' | ');
       const sheets = sheetsByDoc.get(doc.id);
       const sheetsLine = sheets?.length ? `Sheets: ${sheets.join(', ')}` : '';

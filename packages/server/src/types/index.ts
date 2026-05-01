@@ -1,9 +1,18 @@
-export interface DocumentMetadata {
-  type?: 'contract' | 'boq' | 'specification' | 'schedule' | 'report' | 'other';
-  projectName?: string | null;
-  currency?: string | null;
+// Consolidated document profile — replaces separate DocumentMetadata + DocumentProfile
+// Stored in documents.profile (JSONB column)
+export interface DocumentProfile {
+  documentType: 'boq' | 'programme' | 'contract' | 'cost-report' | 'risk-register' | 'specification' | 'procurement' | 'schedule' | 'other';
+  summary: string;
+  language: string;  // ISO 639-1
+  currency: string;  // SAR, USD, AED...
+  projectName?: string;
   parties?: string[];
-  summary?: string;
+  keyCategories: string[];
+  availableValueTypes: string[];
+  totalCost?: number;
+  sheets?: SheetProfile[];
+  suggestedTools: string[];
+  queryHints: string[];
 }
 
 export interface SheetProfile {
@@ -13,19 +22,6 @@ export interface SheetProfile {
   costTotal?: number;
   currency?: string;
   dominantValueTypes: string[];
-}
-
-export interface DocumentProfile {
-  documentType: 'boq' | 'programme' | 'contract' | 'cost-report' | 'risk-register' | 'specification' | 'procurement' | 'other';
-  summary: string;
-  currency: string;
-  language: string;
-  keyCategories: string[];
-  availableValueTypes: string[];
-  totalCost?: number;
-  sheets?: SheetProfile[];
-  suggestedTools: string[];
-  queryHints: string[];
 }
 
 export interface DocumentProfileEntry {
@@ -57,7 +53,7 @@ export interface Document {
   totalPages?: number;
   totalSheets?: number;
   chunks: DocumentChunk[];
-  metadata: DocumentMetadata;
+  profile: DocumentProfile;  // Consolidated profile (replaces metadata)
   ingestedAt: Date;
 }
 

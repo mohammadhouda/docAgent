@@ -22,11 +22,6 @@ export const documents = pgTable('documents', {
   totalPages:      integer('total_pages'),
   totalSheets:     integer('total_sheets'),
   ingestedAt:      timestamp('ingested_at', { withTimezone: true }).notNull(),
-  metaType:        text('meta_type'),
-  metaProjectName: text('meta_project_name'),
-  metaCurrency:    text('meta_currency'),
-  metaParties:     text('meta_parties').array(),
-  metaSummary:     text('meta_summary'),
 });
 
 export const chunks = pgTable('chunks', {

@@ -3,9 +3,9 @@ import { v4 as uuidv4 } from 'uuid';
 import { parseFile } from '../parsers/index.js';
 import { documentStore } from './documentStore.js';
 import { generateEmbeddings } from './embeddings.js';
-import { extractDocumentMetadata } from './metadata.js';
+import { extractInitialProfile } from './metadata.js';
 import { generateDocumentProfile } from './profileGenerator.js';
-import { Document } from '../types/index.js';
+import { Document, DocumentProfile } from '../types/index.js';
 
 export interface IngestedFileResult {
   name: string;
@@ -14,7 +14,7 @@ export interface IngestedFileResult {
   warnings: string[];
 }
 
-// This service handles the ingestion of uploaded documents. It parses the file to extract text chunks, generates embeddings for those chunks, extracts metadata, and stores everything in the document store. The function returns a summary of the ingestion process, including any warnings that were generated during parsing. It is designed to be called by the ingestion worker when processing jobs from the queue.
+// This service handles the ingestion of uploaded documents. It parses the file to extract text chunks, generates embeddings for those chunks, extracts a profile, and stores everything in the document store. The function returns a summary of the ingestion process, including any warnings that were generated during parsing. It is designed to be called by the ingestion worker when processing jobs from the queue.
 
 export async function ingestFile(
   filePath: string,
@@ -31,9 +31,9 @@ export async function ingestFile(
     parseResult.chunks.forEach((c, i) => { c.embedding = embeddings[i]; });
   }
 
-  // Extract document-level metadata using the text of the first few chunks
+  // Extract initial profile from first chunks (before structured extraction)
   const sampleText = parseResult.chunks.slice(0, 2).map((c) => c.content).join('\n\n');
-  const metadata = await extractDocumentMetadata(sampleText, fileName);
+  const initialProfile = await extractInitialProfile(sampleText, fileName);
 
   await documentStore.addDocument({
     id: documentId,
@@ -43,18 +43,18 @@ export async function ingestFile(
     totalPages: parseResult.totalPages,
     totalSheets: parseResult.totalSheets,
     chunks: parseResult.chunks,
-    metadata,
+    profile: initialProfile as DocumentProfile,  // Will be enriched below
     ingestedAt: new Date(),
   });
 
   // Store extracted values separately for efficient querying, linking them to the document ID
   await documentStore.addExtractedValues(parseResult.extractedValues);
 
-  // Generate and persist document profile — enables dynamic agent context injection.
+  // Generate and persist enriched document profile — enables dynamic agent context injection.
   // Runs after extracted values are stored so the profile generator can query them.
   // Non-fatal: document remains fully usable if profile generation fails.
   try {
-    const profile = await generateDocumentProfile(documentId, fileName, metadata);
+    const profile = await generateDocumentProfile(documentId, fileName, initialProfile);
     await documentStore.updateProfile(documentId, profile);
   } catch (err) {
     console.error('[profile] Failed to generate profile for', fileName, err instanceof Error ? err.message : err);
