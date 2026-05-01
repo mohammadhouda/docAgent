@@ -86,8 +86,30 @@ async function inferSheetSchema(
 
 function resolveFormula(cell: ExcelJS.Cell): ExcelJS.CellValue {
   const v = cell.value;
-  if (v && typeof v === 'object' && 'result' in v) {
-    return (v as ExcelJS.CellFormulaValue).result ?? null;
+  if (v && typeof v === 'object') {
+    // Handle formula result: { result: value, formula: "..." }
+    if ('result' in v) {
+      const result = (v as ExcelJS.CellFormulaValue).result;
+      // Result can be null, number, string, boolean, Date, or error object
+      if (result === null || result === undefined) return null;
+      // Handle error objects like { error: "#VALUE!" }
+      if (typeof result === 'object' && 'error' in result) {
+        return String((result as { error: string }).error);
+      }
+      return result;
+    }
+    // Handle rich text: { richText: [{ text: "...", font: {...}}] }
+    if ('richText' in v) {
+      return v;
+    }
+    // Handle shared string or other object types - extract meaningful value
+    if ('value' in v) {
+      return (v as { value: ExcelJS.CellValue }).value;
+    }
+    // Fallback: try to stringify known object types, otherwise return null
+    // This prevents "[object Object]" from appearing in output
+    if (v instanceof Date) return v;
+    return null;
   }
   return v;
 }
@@ -115,7 +137,13 @@ function getCellText(cell: ExcelJS.Cell): string {
   if (typeof v === 'object' && 'richText' in (v as object)) {
     return ((v as ExcelJS.CellRichTextValue).richText ?? []).map((r) => r.text).join('');
   }
-  return String(v);
+  const str = String(v);
+  // Safety check: never return "[object Object]" - return empty string instead
+  if (str === '[object Object]') {
+    console.warn('[excelExtractor] Cell value resolved to [object Object], returning empty string instead');
+    return '';
+  }
+  return str;
 }
 
 function isPercentFormat(cell: ExcelJS.Cell): boolean {
@@ -289,14 +317,17 @@ export async function extractFromWorkbook(
         const val = getCellText(cell).trim();
         if (val) {
           const s = schemaByColNum.get(colNum);
-          parts.push(`${s?.header ?? `C${colNum}`}: ${val}`);
+          // Skip values that are "[object Object]" - these are data extraction errors
+          if (val !== '[object Object]') {
+            parts.push(`${s?.header ?? `C${colNum}`}: ${val}`);
+          }
         }
       });
       if (parts.length === 0) continue;
-      
+
       // Determine sectionTitle: explicit category column takes priority, then fallback to detected section
       const rowSectionTitle = explicitCategory || currentSection || undefined;
-      
+
       const sectionLabel = currentSection ? ` > ${currentSection}` : '';
       const context = `[${sheetName}${sectionLabel}] ${parts.join(' | ')}`.slice(0, 400);
 

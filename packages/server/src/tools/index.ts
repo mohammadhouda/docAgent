@@ -5,6 +5,7 @@ import { queryValues }      from './queryValues.js';
 import { aggregateValues }  from './aggregateValues.js';
 import { computeResult }    from './computeResult.js';
 import { getDocumentInfo }  from './getDocumentInfo.js';
+import { compareBOQvsVendor } from './compareBOQvsVendor.js';
 
 export const toolDefinitions: OpenAI.Chat.ChatCompletionTool[] = [
   // ── 1. Document Info ──────────────────────────────────────────────────────
@@ -172,6 +173,29 @@ export const toolDefinitions: OpenAI.Chat.ChatCompletionTool[] = [
       },
     },
   },
+
+  // ── 6. BOQ vs Vendor Comparison ───────────────────────────────────────────
+  {
+    type: 'function',
+    function: {
+      name: 'compare_boq_vs_vendor',
+      description:
+        'Compare BOQ (Bill of Quantities) totals against Vendor Payment Register to identify inconsistencies.\n\n' +
+        'Use for questions like:\n' +
+        '  - "Identify data inconsistencies between BOQ and Vendor Register"\n' +
+        '  - "Compare BOQ totals with vendor payments"\n' +
+        '  - "What categories are missing from the vendor register?"\n' +
+        '  - "Is the vendor register complete compared to the BOQ?"\n\n' +
+        'Returns: category-by-category comparison with variance analysis and inconsistency flags.',
+      parameters: {
+        type: 'object',
+        properties: {
+          boqDocumentId: { type: 'string', description: 'Document ID of BOQ file (optional, auto-detected if omitted)' },
+          vendorDocumentId: { type: 'string', description: 'Document ID of Vendor Register (optional, auto-detected if omitted)' },
+        },
+      },
+    },
+  },
 ];
 
 export async function executeTool(
@@ -189,6 +213,8 @@ export async function executeTool(
       return await aggregateValues(args as Parameters<typeof aggregateValues>[0]);
     case 'compute_result':
       return await computeResult(args as Parameters<typeof computeResult>[0]);
+    case 'compare_boq_vs_vendor':
+      return await compareBOQvsVendor(args as { boqDocumentId?: string; vendorDocumentId?: string });
     default:
       return { success: false, data: `Unknown tool: ${name}`, sources: [] };
   }
