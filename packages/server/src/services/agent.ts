@@ -8,6 +8,12 @@ import { AskResponse, ConversationMessage, DocumentProfileEntry, SourceReference
 
 const MODEL = 'gpt-5.4-mini';
 
+let queryCounter = 0;
+
+function dbg(queryId: number, msg: string) {
+  console.debug(`[agent] Q#${queryId} ${msg}`);
+}
+
 // This service implements the core agent loop that processes user questions, interacts with the OpenAI API, executes tools, and synthesizes answers. It maintains the conversation history and tracks sources and tools used throughout the interaction. The agent iteratively calls the language model to determine which tools to use and when to stop and generate a final answer based on the accumulated information.
 function parseStructuredAnswer(raw: string): StructuredAnswer {
   try {
@@ -116,11 +122,15 @@ export async function runAgent(
     };
   }
 
+  const qid = ++queryCounter;
+  const queryStart = Date.now();
+
   const profileEntries  = await documentStore.getProfiles();
   const documentContext = buildDocumentContext(profileEntries);
   const messages        = buildMessages(question, history, documentContext);
   const allSources:     SourceReference[] = [];
   const toolsUsed      = new Set<string>();
+  let   totalToolCalls  = 0;
 
   const updateStatus = (status: string) => {
     if (requestId) updateRequestStatus(requestId, status);
@@ -129,15 +139,20 @@ export async function runAgent(
   updateStatus('Analysing your question…');
 
   for (let i = 0; i < config.maxAgentIterations; i++) {
+    const loopStart = Date.now();
     const response = await openaiClient.chat.completions.create(
       { model: MODEL, messages, tools: toolDefinitions, tool_choice: 'auto', temperature: 0 },
       { signal },
     );
 
-    const msg = response.choices[0].message;
+    const msg            = response.choices[0].message;
+    const finishReason   = response.choices[0].finish_reason;
+    const loopDur        = Date.now() - loopStart;
     messages.push(msg);
 
-    if (response.choices[0].finish_reason === 'stop' || !msg.tool_calls) {
+    if (finishReason === 'stop' || !msg.tool_calls) {
+      dbg(qid, `loop=${i + 1} tools=[] dur=${loopDur}ms reason=stop`);
+      dbg(qid, `DONE loops=${i + 1} toolCalls=${totalToolCalls} totalTime=${Date.now() - queryStart}ms`);
       updateStatus('Writing answer…');
       return {
         answer:    parseStructuredAnswer(msg.content ?? FALLBACK_ANSWER),
@@ -147,6 +162,8 @@ export async function runAgent(
     }
 
     const toolNames = msg.tool_calls.map((tc) => tc.function.name);
+    totalToolCalls += toolNames.length;
+    dbg(qid, `loop=${i + 1} tools=[${toolNames.join(',')}] dur=${loopDur}ms`);
     updateStatus(`Calling ${toolNames.map((n) => n.replace(/_/g, ' ')).join(', ')}…`);
 
     const toolResults = await Promise.all(
@@ -173,12 +190,12 @@ export async function runAgent(
     messages.push(...toolResults);
   }
 
-  // If we reach the maximum number of iterations without a stop signal, we proceed to generate a final answer based on the accumulated information. This is a fallback mechanism to ensure that the agent provides a response even if it doesn't explicitly indicate that it's done.
   updateStatus('Preparing final answer…');
   const finalResponse = await openaiClient.chat.completions.create(
     { model: MODEL, messages, temperature: 0 },
     { signal },
   );
+  dbg(qid, `DONE loops=${config.maxAgentIterations}(max) toolCalls=${totalToolCalls} totalTime=${Date.now() - queryStart}ms reason=max_iter`);
   return {
     answer:    parseStructuredAnswer(finalResponse.choices[0].message.content ?? FALLBACK_ANSWER),
     sources:   deduplicateSources(allSources),

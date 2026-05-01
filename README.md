@@ -24,7 +24,7 @@ Upload BOQs, contracts, specs, and schedules — then ask natural language quest
 | **Multi-format Support** | PDF, Excel (`.xlsx`, `.xls`), CSV — parsed with format-specific extractors |
 | **Semantic Search** | pgvector + OpenAI embeddings find meaning, not just keywords |
 | **Structured Extraction** | Costs, quantities, dates, parties, percentages auto-extracted to SQL tables |
-| **5 Specialized Tools** | Agent chooses the right tool for each question type |
+| **6 Specialized Tools** | Agent chooses the right tool for each question type |
 | **Cited Responses** | Every fact links back to source document + location |
 | **Async Processing** | BullMQ + Redis queues handle uploads and questions in background |
 | **Structured Answers** | JSON responses render as tables, timelines, fact grids, party cards |
@@ -235,7 +235,7 @@ This ensures consistent querying regardless of LLM inference variations.
 
 `POST /api/ask` enqueues a job and returns immediately (`202`). A background worker runs an **agent loop**:
 
-1. **Model:** `gpt-4o-mini` with function calling
+1. **Model:** `gpt-5.4-mini` with function calling
 2. **Max iterations:** 5 tool-call loops per question
 3. **Tool protocol:** Each tool answers a specific question type
 4. **Truth constraint:** Every number/date/party must come from tool output
@@ -245,7 +245,7 @@ This ensures consistent querying regardless of LLM inference variations.
 ```
 User Question
     ↓
-Agent Loop (gpt-4o-mini)
+Agent Loop (gpt-5.4-mini)
     ↓
 Choose Tool → Execute SQL → Return Result
     ↓
@@ -256,11 +256,30 @@ Synthesize Answer (structured JSON)
 Frontend renders as typed cards
 ```
 
+### Debug Console Output (server only)
+
+One line per loop + a summary line — visible in `npm run dev` server output:
+
+```
+[agent] Q#1 loop=1 tools=[get_document_info,aggregate_values] dur=312ms
+[agent] Q#1 loop=2 tools=[compute_result] dur=180ms
+[agent] Q#1 DONE loops=2 toolCalls=3 totalTime=2140ms reason=stop
+```
+
+| Field | Meaning |
+|---|---|
+| `Q#N` | Per-process query counter — identifies which query each line belongs to |
+| `loop=N` | Which iteration of the agent loop |
+| `tools=[...]` | Tools called in that iteration |
+| `dur=Nms` | Time for that single LLM call |
+| `totalTime=Nms` | Wall time for the entire query (all loops) |
+| `reason=stop` | Model signalled done; `reason=max_iter` means it hit the 5-loop cap |
+
 ---
 
-## Available Tools (5 Total)
+## Available Tools (6 Total)
 
-The system uses **5 core tools** that cover all question types through flexible parameters:
+The system uses **6 tools** that cover all question types through flexible parameters:
 
 | Tool | Answers Questions Like |
 |---|---|
@@ -269,6 +288,7 @@ The system uses **5 core tools** that cover all question types through flexible 
 | `query_values` | "List all MEP line items" / "What quantities of concrete?" / "Who are the parties?" / "Items above 500k SAR" |
 | `aggregate_values` | "Total MEP budget" / "Cost breakdown by trade" / "Budget vs actual" / "Which category costs most?" |
 | `compute_result` | "What is the difference?" / "What percentage is MEP?" / "VAT-inclusive total" / "Rate per m³" |
+| `compare_boq_vs_vendor` | "Identify inconsistencies between BOQ and Vendor Register" / "What categories are missing?" |
 
 ### Tool Parameters
 
