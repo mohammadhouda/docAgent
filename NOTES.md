@@ -2,70 +2,322 @@
 
 ## AI Coding Agent
 
-Built with Claude Code assisting across architecture, code generation, refactoring, debugging, and documentation throughout all 11 build phases.
+Built with **Claude Code** (Qwen Code) assisting across architecture, code generation, refactoring, debugging, and documentation throughout all development phases.
 
 ---
 
-## How Long It Took
+## Development Time
 
-Approximately **15–18 hours** across 11 iterative development phases.
+Approximately **15–18 hours** across multiple iterative development phases.
 
-The project was built using an AI-assisted workflow with Claude Code as a development accelerator, but the engineering direction, architecture decisions, feature priorities, validation, and refinements were led by me throughout the process.
+The project was built using an AI-assisted workflow with Claude Code as a development accelerator. Engineering direction, architecture decisions, feature priorities, validation, and refinements were led throughout the process.
 
-Each phase started from a product or technical objective such as improving semantic search, introducing structured JSON responses, or refactoring parts of the system. I then used Claude Code to help implement changes faster across multiple files, while I reviewed outputs, tested behavior, identified issues, adjusted requirements, and guided the next iteration.
+Each phase started from a product or technical objective. Claude Code helped implement changes across multiple files, while outputs were reviewed, tested, issues identified, requirements adjusted, and next iterations guided.
 
-The workflow was less about handing everything to AI and more about combining engineering judgment with AI-assisted execution to move faster while maintaining control over the system design and quality.
+The workflow combined engineering judgment with AI-assisted execution to move faster while maintaining control over system design and quality.
 
 ---
 
 ## Build Phases
 
-| Phase | What was built |
+| Phase | What Was Built |
 |---|---|
-| 1 | Monorepo scaffold — npm workspaces, shared tsconfig, concurrently dev runner |
-| 2 | Parse & ingest — PDF per-page + Excel row-batch, chunker with overlap, Multer upload route |
-| 3 | AI agent — GPT function-calling loop, 5 initial tools, document metadata extraction |
-| 4 | Frontend — Next.js chat interface, drag-and-drop upload, source citations, tool badges |
-| 5 | Semantic search — `text-embedding-3-small` embeddings, pgvector cosine similarity, FTS fallback |
-| 6 | Structured JSON responses — typed section schema, system prompt rewrite, `StructuredAnswer.tsx` renderer |
-| 7 | PostgreSQL persistence — Drizzle ORM, pgvector, BullMQ upload queue, conversation history |
-| 8 | Structured value extraction — deterministic Excel column classifier, per-page LLM extraction for PDFs |
-| 9 | Tool expansion (5 → 16) — `calculate_cost_summary`, `compare_costs`, `extract_quantities`, `extract_parties`, `extract_percentages`, `get_document_sections`; `category` filter added |
-| 10 | Refactor pass — dead code removed, misleading names fixed, model name bug corrected, broken polling removed |
-| 11 | Async ask queue — `POST /api/ask` converted from blocking to BullMQ job, eliminates socket hangouts |
+| 1 | **Monorepo scaffold** — npm workspaces, shared tsconfig, concurrently dev runner |
+| 2 | **Parse & ingest** — PDF per-page + Excel row-batch, chunker with overlap, Multer upload route |
+| 3 | **AI agent** — GPT function-calling loop, 5 initial tools, document metadata extraction |
+| 4 | **Frontend** — Next.js chat interface, drag-and-drop upload, source citations, tool badges |
+| 5 | **Semantic search** — `text-embedding-3-small` embeddings, pgvector cosine similarity, FTS fallback |
+| 6 | **Structured JSON responses** — typed section schema, system prompt rewrite, `StructuredAnswer.tsx` renderer |
+| 7 | **PostgreSQL persistence** — Drizzle ORM, pgvector, BullMQ upload queue, conversation history |
+| 8 | **Structured value extraction** — deterministic Excel column classifier, per-page LLM extraction for PDFs |
+| 9 | **Tool expansion (5 → 16)** — cost summary, compare costs, quantities, parties, percentages, sections; `category` filter added |
+| 10 | **Refactor pass** — dead code removed, misleading names fixed, model name bug corrected, broken polling removed |
+| 11 | **Async ask queue** — `POST /api/ask` converted to BullMQ job, eliminates socket hangouts |
+| 12 | **Budget vs Actual tracking** — type normalization for budget/actual/variance columns, over-budget detection |
+| 13 | **Vendor outstanding tracking** — outstanding type, contract_value type, type aliases in aggregateValues |
+| 14 | **Category aggregation fix** — LLM prompt for category columns, section_title population from Excel Category column |
 
 ---
 
 ## Key Design Decisions
 
-**Function calling over prompt stuffing**
-The agent runs targeted SQL queries via GPT tool calls instead of dumping document text into the prompt. Every factual claim in the answer is grounded in tool output. Token cost stays low regardless of how many documents are loaded.
+### Function Calling Over Prompt Stuffing
 
-**Structured JSON responses, never markdown**
-The AI returns a typed schema (`title`, `summary`, `sections[]`). The frontend owns all presentation decisions — the same data renders differently as a table, timeline, or fact grid depending on the section type. This makes the AI output predictable and the UI extensible without touching the backend.
+The agent runs targeted SQL queries via GPT tool calls instead of dumping document text into the prompt.
 
-**Deterministic Excel extraction**
-Column classification and value extraction for Excel files are fully regex-based — zero tokens per row. LLM extraction is only used for PDFs where layout is unpredictable. This keeps ingestion cost proportional to PDF pages, not spreadsheet size.
+**Benefits:**
+- Every factual claim is grounded in tool output
+- Token cost stays low regardless of document count
+- No hallucinated numbers
 
-**Two-pass ingestion**
-Every file goes through both chunking (for search) and structured extraction (for direct SQL queries). The `extracted_values` table lets the agent answer "what is the total MEP budget?" with a single SQL aggregate — no vector search, no AI calls at query time.
+### Structured JSON Responses, Never Markdown
 
-**Async job queues for everything**
-Both file uploads and question answering use BullMQ + Redis. The HTTP connection closes immediately; the frontend polls for results. This eliminates socket hangouts on long operations and makes both flows consistent.
+The AI returns a typed schema (`title`, `summary`, `sections[]`). The frontend owns all presentation decisions.
 
-**Cascade deletes**
-`chunks` and `extracted_values` both have `ON DELETE CASCADE` on `documents`. Deleting a document is a single SQL statement — no manual cleanup.
+**Benefits:**
+- Predictable AI output
+- UI extensible without backend changes
+- Same data renders differently as table, timeline, or fact grid
+
+### Deterministic Excel Extraction
+
+Column classification and value extraction for Excel files are regex-based with LLM schema inference — zero tokens per row.
+
+**Benefits:**
+- Ingestion cost proportional to PDF pages, not spreadsheet size
+- Consistent type assignment via header keyword normalization
+- LLM only used for schema inference, not row-by-row processing
+
+### Two-Pass Ingestion
+
+Every file goes through both:
+1. **Chunking** — for semantic search via pgvector
+2. **Structured extraction** — for direct SQL queries
+
+**Benefits:**
+- `extracted_values` table enables single SQL aggregate queries
+- No vector search needed for "what is the total MEP budget?"
+- No AI calls at query time
+
+### Async Job Queues for Everything
+
+Both file uploads and question answering use BullMQ + Redis.
+
+**Benefits:**
+- HTTP connection closes immediately
+- Frontend polls for results
+- No socket timeouts on long operations
+- Consistent flow for uploads and questions
+
+### Type Normalization
+
+Excel extractor normalizes monetary column types based on header keywords, overriding LLM inference:
+
+```typescript
+if (header.includes('outstanding') || header.includes('balance')) return 'outstanding';
+if (header.includes('budget') || header.includes('planned')) return 'budget';
+if (header.includes('actual') || header.includes('paid')) return 'actual';
+if (header.includes('variance') || header.includes('difference')) return 'variance';
+```
+
+**Why:** The LLM sometimes marks all monetary columns as `cost` or confuses `outstanding` with `committed_cost`. Header keywords are more reliable.
+
+### Type Aliases in Aggregation
+
+`aggregateValues` expands types to match variants:
+
+```typescript
+'budget': ['budget', 'budgeted_cost', 'contract_value'],
+'actual': ['actual', 'actual_cost'],
+'outstanding': ['outstanding'],
+```
+
+**Why:** Allows querying `type: 'budget'` to match `contract_value` from vendor registers.
+
+### Category Column Recognition
+
+Excel extractor now recognizes "Category", "Trade", "Section" columns and populates `section_title` for each extracted value.
+
+**Why:** Enables `groupBy: 'category'` to use actual category names (e.g., "Structural & Facade") instead of regex-extracted code prefixes.
+
+### Cascade Deletes
+
+`chunks` and `extracted_values` both have `ON DELETE CASCADE` on `documents`.
+
+**Benefits:**
+- Deleting a document is one SQL statement
+- No manual cleanup required
+
+---
+
+## Bugs Fixed
+
+### 1. BOQ Category Aggregation (Phase 14)
+
+**Problem:** Query "Which BOQ category has the highest value?" returned "Data point not found" instead of "Structural & Facade at SAR 47,975,000".
+
+**Root Cause:**
+- Excel "Category" column was classified as `reference` instead of `category`
+- `section_title` was null for all extracted values
+- `groupBy: 'category'` fell back to regex prefix extraction
+
+**Fix:**
+- Updated LLM prompt to recognize "Category" columns
+- Added `category` role to `ColRole` type
+- Updated `aggregateValues` to use `section_title` when available
+
+### 2. Budget vs Actual (Phase 12)
+
+**Problem:** Query "What is the budget vs actual spend?" returned incorrect values. Cost_Tracking sheet was skipped entirely.
+
+**Root Cause:**
+- No `label` column existed (Category served as both label and category)
+- Extractor required `labelColNum` to get description
+- LLM marked Budget, Actual, Variance all as `type: "cost"`
+
+**Fix:**
+- Fallback to category column when no label column exists
+- Type normalization based on header keywords
+- Added handlers for `budget`, `actual`, `variance` types
+
+### 3. Vendor Outstanding (Phase 13)
+
+**Problem:** Query "Total outstanding owed to vendors?" returned 67M instead of 55.5M.
+
+**Root Cause:**
+- "Outstanding (SAR)" column was extracted as `committed_cost` or `variance`
+- Type normalization didn't handle "outstanding" keyword
+
+**Fix:**
+- Added `outstanding` and `contract_value` types
+- Updated type normalization to force based on header keywords
+- Added type aliases in `aggregateValues`
+
+### 4. Negative Variance Percentages
+
+**Problem:** Variance % for over-budget categories was not extracted (filtered as invalid).
+
+**Root Cause:** Percentage validation required `pct > 0`.
+
+**Fix:** Allow negative percentages for variance columns.
 
 ---
 
 ## What I Would Improve Given More Time
 
-**Streaming responses**
-The agent loop buffers the full answer before sending. Streaming each token to the UI as it's generated would make the product feel significantly faster, especially for long answers. The BullMQ polling approach would need to be replaced or augmented with Server-Sent Events or WebSockets.
+### 1. Streaming Responses
 
-**OCR support**
-`pdf-parse` cannot read image-based or scanned PDFs — a common format in construction document management. Integrating a proper OCR pipeline (e.g. AWS Textract or Azure Document Intelligence) would make the system usable with the majority of real-world project archives.
+**Current:** Agent loop buffers full answer before sending.
 
-**Conversation-aware agent**
-The agent currently receives only the current question. It does not have access to prior turns in the conversation. Feeding recent message history into the agent's context would allow follow-up questions ("and what about phase 2?") to resolve correctly without repeating context.
+**Improvement:** Stream each token to UI as generated using Server-Sent Events or WebSockets.
 
+**Impact:** Significantly faster perceived latency, especially for long answers.
+
+### 2. OCR Support
+
+**Current:** `pdf-parse` cannot read image-based or scanned PDFs.
+
+**Improvement:** Integrate AWS Textract or Azure Document Intelligence.
+
+**Impact:** Usable with majority of real-world construction archives (often scanned).
+
+### 3. Conversation-Aware Agent
+
+**Current:** Agent receives only current question, not prior turns.
+
+**Improvement:** Feed recent message history into agent context.
+
+**Impact:** Follow-up questions ("and what about phase 2?") resolve correctly without repeating context.
+
+### 4. Semantic Answer Cache
+
+**Current:** No caching of answers.
+
+**Improvement:** Embed questions, cache similar queries for 2 hours.
+
+**Impact:** Instant responses to repeated questions, reduced AI costs.
+
+### 5. Authentication & Multi-Tenancy
+
+**Current:** Single-user, trusted network only.
+
+**Improvement:** Add user accounts, document isolation, role-based access.
+
+**Impact:** Production-ready for commercial deployment.
+
+---
+
+## Lessons Learned
+
+### 1. Type Normalization is Critical
+
+LLM schema inference is inconsistent. Header keyword matching is more reliable for monetary columns.
+
+### 2. Section Detection Matters
+
+Excel files often have category columns. Recognizing them enables accurate `groupBy: 'category'` queries.
+
+### 3. Type Aliases Reduce Friction
+
+Users query for "budget" and "actual". The system should match `contract_value`, `budgeted_cost`, etc. transparently.
+
+### 4. Async Queues Prevent Timeouts
+
+Long-running operations (PDF extraction, multi-tool questions) must run in background with polling.
+
+### 5. Structured Output Enables Better UX
+
+Typed JSON responses let the frontend render tables, timelines, and fact grids without parsing markdown.
+
+---
+
+## File Changes Summary
+
+### Core Extraction
+- `packages/server/src/extractors/excelExtractor.ts` — LLM schema inference, type normalization, category column handling
+- `packages/server/src/extractors/pdfExtractor.ts` — per-page LLM extraction
+
+### Tools
+- `packages/server/src/tools/aggregateValues.ts` — type aliases, category grouping
+- `packages/server/src/tools/queryValues.ts` — category filter, type filtering
+- `packages/server/src/tools/utils.ts` — semantic category resolution
+
+### Agent
+- `packages/server/src/services/agent.ts` — tool loop, document context
+- `packages/server/src/services/openai.ts` — system prompt, tool routing rules
+
+### Frontend
+- `packages/web/src/components/StructuredAnswer.tsx` — section renderer
+- `packages/web/src/app/page.tsx` — main chat interface
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| **Backend** | Node.js 18, Express, TypeScript |
+| **Frontend** | Next.js 14 (App Router), React 18, Tailwind CSS |
+| **AI** | OpenAI (`gpt-5.4-mini`, `gpt-4o-mini`, `text-embedding-3-small`) |
+| **Database** | PostgreSQL 14+ with `pgvector`, Drizzle ORM |
+| **Queue** | BullMQ + Redis |
+| **Parsing** | `pdf-parse`, `exceljs` |
+
+---
+
+## Repository Structure
+
+```
+doc-agent/
+├── packages/
+│   ├── server/          # Backend
+│   │   ├── src/
+│   │   │   ├── db/      # Drizzle schema
+│   │   │   ├── extractors/  # PDF + Excel extraction
+│   │   │   ├── parsers/     # PDF + Excel parsing
+│   │   │   ├── routes/      # API endpoints
+│   │   │   ├── services/    # AI, embeddings, queues
+│   │   │   ├── tools/       # 16 agent tools
+│   │   │   └── utils/       # Chunking, validators
+│   │   └── test-docs/   # Sample BOQs, schedules, vendor registers
+│   │
+│   └── web/             # Frontend
+│       ├── src/
+│       │   ├── app/     # Next.js pages
+│       │   ├── components/  # UI components
+│       │   └── lib/     # API client
+│       └── .env.local
+│
+├── docker-compose.yml   # PostgreSQL + Redis
+├── .env.example         # Environment template
+├── README.md            # User documentation
+├── HOW_IT_WORKS.md      # System architecture
+├── NOTES.md             # This file
+└── CLAUDE.md            # Claude Code context
+```
+
+---
+
+## License
+
+MIT
