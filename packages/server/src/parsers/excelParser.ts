@@ -102,6 +102,7 @@ export async function parseExcel(filePath: string, documentId: string): Promise<
       const row    = worksheet.getRow(rowNum);
       const cells: string[] = [];
       let numericCount = 0;
+      let isBoldRow    = false;
 
       row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
         const header = headers[colNumber - 1] ?? `Col${colNumber}`;
@@ -111,13 +112,21 @@ export async function parseExcel(filePath: string, documentId: string): Promise<
           const num = parseFloat(value.replace(/[,\s]/g, ''));
           if (!isNaN(num) && num > 0) numericCount++;
         }
+        // Treat the row as bold if the first non-empty cell has bold font
+        if (!isBoldRow && cell.font?.bold === true) isBoldRow = true;
       });
 
       if (cells.length === 0) continue;
 
-      // A section-header row has fewer than 2 numeric cells and at most 3 total cells
-      // (item-no + description only — no cost/qty/rate values filled in).
-      if (numericCount < 2 && cells.length <= 3) {
+      // Section-header detection — a row is a section header when:
+      //   (a) bold font and no numeric values, OR
+      //   (b) very few cells (≤3) and fewer than 2 numeric values
+      // This catches styled BOQ division headers missed by the cell-count heuristic alone.
+      const isSectionHeader =
+        (isBoldRow && numericCount === 0) ||
+        (numericCount < 2 && cells.length <= 3);
+
+      if (isSectionHeader) {
         flushSection();
 
         // Derive a readable section title from the cell values

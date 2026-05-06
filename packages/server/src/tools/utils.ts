@@ -35,23 +35,24 @@ export function likeParam(value: string | undefined): string | null {
 // Cosine distance threshold: sheets further than this from the query embedding are ignored.
 const CATEGORY_SIMILARITY_THRESHOLD = 0.65;
 
-interface SheetDistRow {
-  sheet_name: string;
-  min_dist:   number;
+interface SectionDistRow {
+  name:     string;
+  min_dist: number;
 }
 
 /**
- * Resolves a user-supplied category term (e.g. "ELC", "elec", "electrical") into an array of
- * SQL LIKE patterns for use with `ILIKE ANY($n::text[])`.
+ * Resolves a user-supplied category term into SQL ILIKE patterns used by all tools.
  *
- * Strategy:
- *   1. Always include `%{category}%` so partial matches still work.
- *   2. Embed the term and find which document sheets are nearest in vector space — those sheet
- *      names are added as additional patterns, covering abbreviations that are not substrings
- *      of the canonical name (e.g. "ELC" → "Electrical Works").
- *   3. If embeddings are unavailable, only the original ILIKE pattern is returned.
+ * Sources of patterns (in priority order):
+ *   1. Substring:  `%{category}%` — always included.
+ *   2. Code-prefix: `MEP-%`, `MEP.%` — for short all-letter terms that look like BOQ codes.
+ *   3. Semantic:   embed the term and find nearby sheet names AND section titles via
+ *                  pgvector cosine distance on chunk embeddings; add those as patterns.
  *
- * Returns null when category is undefined, which signals "no filter" to the SQL query.
+ * Searching section_title as well as sheet_name means single-sheet BOQs (where all items
+ * share one sheet name) are still correctly filtered by trade section.
+ *
+ * Returns null when category is undefined, which signals "no filter" to callers.
  */
 export async function resolveCategory(
   category: string | undefined,
@@ -62,12 +63,22 @@ export async function resolveCategory(
   const patterns = new Set<string>();
   patterns.add(`%${category}%`);
 
+  // Code-prefix expansion for short uppercase-style codes (MEP, ELC, HVAC …)
+  const trimmed = category.trim();
+  if (/^[A-Za-z]{1,6}$/.test(trimmed)) {
+    patterns.add(`${trimmed.toUpperCase()}-%`);
+    patterns.add(`${trimmed.toUpperCase()}.%`);
+    patterns.add(`${trimmed.toLowerCase()}-%`);
+    patterns.add(`${trimmed.toLowerCase()}.%`);
+  }
+
   try {
     const embedding = await generateEmbedding(category);
     const vectorStr = `[${embedding.join(',')}]`;
 
-    const result = await pool.query<SheetDistRow>(
-      `SELECT   c.sheet_name,
+    // Find nearest sheet names via chunk embeddings
+    const sheetResult = await pool.query<SectionDistRow>(
+      `SELECT   c.sheet_name   AS name,
                 MIN(c.embedding <=> $2::vector) AS min_dist
        FROM     chunks c
        WHERE    ($1::uuid IS NULL OR c.document_id = $1::uuid)
@@ -78,15 +89,54 @@ export async function resolveCategory(
        LIMIT    5`,
       [documentId ?? null, vectorStr],
     );
-
-    for (const row of result.rows) {
+    for (const row of sheetResult.rows) {
       if (row.min_dist < CATEGORY_SIMILARITY_THRESHOLD) {
-        patterns.add(`%${row.sheet_name}%`);
+        patterns.add(`%${row.name}%`);
+      }
+    }
+
+    // Find nearest section titles via chunk embeddings (critical for single-sheet BOQs)
+    const sectionResult = await pool.query<SectionDistRow>(
+      `SELECT   c.section_title AS name,
+                MIN(c.embedding <=> $2::vector) AS min_dist
+       FROM     chunks c
+       WHERE    ($1::uuid IS NULL OR c.document_id = $1::uuid)
+         AND    c.section_title IS NOT NULL
+         AND    c.embedding     IS NOT NULL
+       GROUP BY c.section_title
+       ORDER BY min_dist
+       LIMIT    8`,
+      [documentId ?? null, vectorStr],
+    );
+    for (const row of sectionResult.rows) {
+      if (row.min_dist < CATEGORY_SIMILARITY_THRESHOLD) {
+        patterns.add(`%${row.name}%`);
       }
     }
   } catch {
-    // Embeddings unavailable — the original ILIKE pattern is still in the set.
+    // Embeddings unavailable — substring and code-prefix patterns still apply.
   }
 
   return Array.from(patterns);
+}
+
+/**
+ * Builds the SQL fragment that tests patterns against label, sheet_name, AND section_title.
+ * Use this in every tool that accepts a category filter so section-level matching is consistent.
+ *
+ * Usage in a parameterised query:
+ *   WHERE ... AND categoryMatch(patterns, $N)
+ *
+ * Returns an inline SQL expression (no trailing AND/OR) — callers wrap it:
+ *   AND ($N::text[] IS NULL OR <fragment>)
+ */
+export function categoryMatchSQL(
+  patternsParam: string, // e.g. '$3'
+  evAlias = 'ev',
+): string {
+  return (
+    `COALESCE(${evAlias}.sheet_name, '')   ILIKE ANY(${patternsParam}::text[]) OR ` +
+    `COALESCE(${evAlias}.section_title, '') ILIKE ANY(${patternsParam}::text[]) OR ` +
+    `${evAlias}.label                       ILIKE ANY(${patternsParam}::text[])`
+  );
 }

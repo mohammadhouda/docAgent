@@ -44,11 +44,14 @@ export async function searchDocuments(args: {
           ? `Sheet: ${chunk.sheetName}`
           : `Chunk ${chunk.chunkIndex + 1}`;
 
-      // Include one neighbour chunk for context continuity
-      const nextChunk = document.chunks[chunk.chunkIndex + 1];
-      const content = nextChunk
-        ? `${chunk.content}\n[CONTINUES →]:\n${nextChunk.content.slice(0, 300)}`
-        : chunk.content;
+      // Include the next two chunks so that body-text sections that follow header/table
+      // chunks are always visible — prevents the agent missing content that ranked just
+      // outside the top-N but is physically adjacent to the matched chunk.
+      let content = chunk.content;
+      const next1 = document.chunks[chunk.chunkIndex + 1];
+      const next2 = document.chunks[chunk.chunkIndex + 2];
+      if (next1) content += `\n[CONTINUES →]:\n${next1.content}`;
+      if (next2) content += `\n[...]\n${next2.content.slice(0, 400)}`;
 
       return `[Result ${i + 1}] FILE: ${document.fileName} (${location})\n${content}`;
     })

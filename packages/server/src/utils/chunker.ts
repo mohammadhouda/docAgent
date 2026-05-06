@@ -93,7 +93,13 @@ export function chunkBlocks(
     if (group.length === 0) return;
 
     const raw     = group.map((b) => b.text).join('\n').trim();
-    const content = overlapText ? `${overlapText}\n${raw}` : raw;
+    const first   = group[0];
+
+    // Prefix with section title so the chunk embedding captures which section it belongs to.
+    // This makes "4. PROGRESS UPDATE" semantically searchable even in diluted body chunks.
+    const sectionPrefix = first.sectionTitle ? `[Section: ${first.sectionTitle}]\n` : '';
+    const base    = overlapText ? `${overlapText}\n${raw}` : raw;
+    const content = sectionPrefix + base;
 
     // Merge tiny chunks into the previous one instead of creating noise.
     if (estimateTokens(content) < config.minChunkTokens && results.length > 0) {
@@ -103,7 +109,6 @@ export function chunkBlocks(
       return;
     }
 
-    const first = group[0];
     results.push({
       id:           `${documentId}-chunk-${localIndex}`,
       documentId,
